@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>WebDriver Test App</title>
+</head>
+<body>
+  <div id="root">
+    <h1 id="title">Test App</h1>
+    <p id="counter">Count: 0</p>
+    <button id="increment">Increment</button>
+    <input id="text-input" type="text" placeholder="Type here" />
+    <a id="link" href="/page2">Go to page 2</a>
+    <select id="dropdown">
+      <option value="a">Option A</option>
+      <option value="b" selected>Option B</option>
+    </select>
+    <div id="hidden" style="display:none">Hidden content</div>
+  </div>
+  <script>
+    document.getElementById('increment').addEventListener('click', function() {
+      var counter = document.getElementById('counter');
+      var count = parseInt(counter.textContent.split(': ')[1]) + 1;
+      counter.textContent = 'Count: ' + count;
+    });
+  </script>
+</body>
+</html>

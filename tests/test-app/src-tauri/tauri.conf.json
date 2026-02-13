@@ -1,0 +1,24 @@
+{
+  "productName": "webdriver-test-app",
+  "version": "0.1.0",
+  "identifier": "com.tauri-webdriver.test-app",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "WebDriver Test App",
+        "width": 800,
+        "height": 600
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": []
+  }
+}

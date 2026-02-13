@@ -1,0 +1,21 @@
+[package]
+name = "tauri-plugin-webdriver"
+version = "0.1.0"
+description = "Tauri plugin that enables WebDriver-based e2e testing on macOS"
+links = "tauri-plugin-webdriver"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+axum = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+tauri = { version = "2", default-features = false, features = ["wry", "dynamic-acl"] }
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
