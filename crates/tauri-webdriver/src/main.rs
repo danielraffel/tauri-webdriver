@@ -115,6 +115,13 @@ impl W3cError {
     fn bad_request(msg: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, "invalid argument", msg)
     }
+    fn javascript_error(msg: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "javascript error",
+            msg,
+        )
+    }
 }
 
 impl IntoResponse for W3cError {
@@ -879,7 +886,8 @@ async fn execute_sync(
         "/script/execute",
         json!({"script": script, "args": args}),
     )
-    .await?;
+    .await
+    .map_err(|e| W3cError::javascript_error(e.message))?;
     Ok(w3c_value(
         result.get("value").cloned().unwrap_or(Value::Null),
     ))
@@ -902,10 +910,133 @@ async fn execute_async(
         "/script/execute-async",
         json!({"script": script, "args": args}),
     )
-    .await?;
+    .await
+    .map_err(|e| W3cError::javascript_error(e.message))?;
     Ok(w3c_value(
         result.get("value").cloned().unwrap_or(Value::Null),
     ))
+}
+
+// --- Cookie handlers ---
+
+async fn get_all_cookies(
+    AxumState(state): AxumState<SharedState>,
+    Path(sid): Path<String>,
+) -> W3cResult {
+    let guard = state.session.lock().await;
+    let session = check_session(&guard, &sid)?;
+    let result = plugin_post(session, "/cookie/get-all", json!({})).await?;
+    Ok(w3c_value(
+        result.get("cookies").cloned().unwrap_or(json!([])),
+    ))
+}
+
+async fn get_named_cookie(
+    AxumState(state): AxumState<SharedState>,
+    Path((sid, name)): Path<(String, String)>,
+) -> W3cResult {
+    let guard = state.session.lock().await;
+    let session = check_session(&guard, &sid)?;
+    let result = plugin_post(session, "/cookie/get", json!({"name": name})).await?;
+    let cookie = result.get("cookie").cloned().unwrap_or(Value::Null);
+    if cookie.is_null() {
+        return Err(W3cError::new(
+            StatusCode::NOT_FOUND,
+            "no such cookie",
+            format!("Cookie '{name}' not found"),
+        ));
+    }
+    Ok(w3c_value(cookie))
+}
+
+async fn add_cookie(
+    AxumState(state): AxumState<SharedState>,
+    Path(sid): Path<String>,
+    Json(body): Json<Value>,
+) -> W3cResult {
+    let guard = state.session.lock().await;
+    let session = check_session(&guard, &sid)?;
+    let cookie = body.get("cookie").cloned().unwrap_or(json!({}));
+    plugin_post(session, "/cookie/add", json!({"cookie": cookie})).await?;
+    Ok(w3c_value(json!(null)))
+}
+
+async fn delete_cookie(
+    AxumState(state): AxumState<SharedState>,
+    Path((sid, name)): Path<(String, String)>,
+) -> W3cResult {
+    let guard = state.session.lock().await;
+    let session = check_session(&guard, &sid)?;
+    plugin_post(session, "/cookie/delete", json!({"name": name})).await?;
+    Ok(w3c_value(json!(null)))
+}
+
+async fn delete_all_cookies(
+    AxumState(state): AxumState<SharedState>,
+    Path(sid): Path<String>,
+) -> W3cResult {
+    let guard = state.session.lock().await;
+    let session = check_session(&guard, &sid)?;
+    plugin_post(session, "/cookie/delete-all", json!({})).await?;
+    Ok(w3c_value(json!(null)))
+}
+
+// --- Action handlers ---
+
+async fn perform_actions(
+    AxumState(state): AxumState<SharedState>,
+    Path(sid): Path<String>,
+    Json(body): Json<Value>,
+) -> W3cResult {
+    let guard = state.session.lock().await;
+    let session = check_session(&guard, &sid)?;
+
+    // Walk through the actions and resolve any W3C element references in
+    // pointer action origins before forwarding to the plugin.
+    let mut resolved_body = body.clone();
+    if let Some(actions) = resolved_body
+        .get_mut("actions")
+        .and_then(|a| a.as_array_mut())
+    {
+        for seq in actions.iter_mut() {
+            if let Some(sub_actions) =
+                seq.get_mut("actions").and_then(|a| a.as_array_mut())
+            {
+                for action in sub_actions.iter_mut() {
+                    // Check if origin is a W3C element reference object.
+                    if let Some(origin) = action.get("origin").cloned() {
+                        if let Some(eid) =
+                            origin.get(W3C_ELEMENT_KEY).and_then(|v| v.as_str())
+                        {
+                            if let Some(elem_ref) = session.elements.get(eid) {
+                                // Replace element UUID with selector/index for the plugin.
+                                action["origin"] = json!({
+                                    W3C_ELEMENT_KEY: {
+                                        "selector": elem_ref.selector,
+                                        "index": elem_ref.index,
+                                        "using": elem_ref.using
+                                    }
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    plugin_post(session, "/actions/perform", resolved_body).await?;
+    Ok(w3c_value(json!(null)))
+}
+
+async fn release_actions(
+    AxumState(state): AxumState<SharedState>,
+    Path(sid): Path<String>,
+) -> W3cResult {
+    let guard = state.session.lock().await;
+    let session = check_session(&guard, &sid)?;
+    plugin_post(session, "/actions/release", json!({})).await?;
+    Ok(w3c_value(json!(null)))
 }
 
 // --- Screenshot handlers ---
@@ -1020,6 +1151,18 @@ async fn main() {
         // Scripts
         .route("/session/{sid}/execute/sync", post(execute_sync))
         .route("/session/{sid}/execute/async", post(execute_async))
+        // Cookies
+        .route("/session/{sid}/cookie", get(get_all_cookies))
+        .route("/session/{sid}/cookie", post(add_cookie))
+        .route("/session/{sid}/cookie", delete(delete_all_cookies))
+        .route("/session/{sid}/cookie/{name}", get(get_named_cookie))
+        .route(
+            "/session/{sid}/cookie/{name}",
+            delete(delete_cookie),
+        )
+        // Actions
+        .route("/session/{sid}/actions", post(perform_actions))
+        .route("/session/{sid}/actions", delete(release_actions))
         // Screenshots
         .route("/session/{sid}/screenshot", get(take_screenshot))
         .route(

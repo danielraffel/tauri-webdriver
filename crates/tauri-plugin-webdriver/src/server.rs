@@ -192,6 +192,36 @@ struct NavReq {
     url: String,
 }
 
+#[derive(Deserialize)]
+struct CookieNameReq {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct CookieAddReq {
+    cookie: CookieData,
+}
+
+#[derive(Deserialize)]
+struct CookieData {
+    name: String,
+    value: String,
+    #[serde(default = "default_path")]
+    path: String,
+    #[serde(default)]
+    domain: Option<String>,
+    #[serde(default)]
+    secure: bool,
+    #[serde(rename = "httpOnly", default)]
+    http_only: bool,
+    #[serde(default)]
+    expiry: Option<u64>,
+}
+
+fn default_path() -> String {
+    "/".to_string()
+}
+
 // --- Window handlers ---
 
 async fn window_handle<R: Runtime>(
@@ -801,6 +831,294 @@ img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg)
     Ok(Json(json!({"data": result})))
 }
 
+// --- Cookie handlers ---
+
+async fn cookie_get_all<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(_body): Json<Value>,
+) -> ApiResult {
+    let script = r#"
+var store = window.__WEBDRIVER__.cookies;
+var cookies = [];
+var keys = Object.keys(store);
+for (var i = 0; i < keys.length; i++) {
+    cookies.push(store[keys[i]]);
+}
+return cookies;
+"#;
+    let result = eval_js(&state.app, None, script).await?;
+    Ok(Json(json!({"cookies": result})))
+}
+
+async fn cookie_get<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(body): Json<CookieNameReq>,
+) -> ApiResult {
+    let name_json = serde_json::to_string(&body.name).unwrap();
+    let script = format!(
+        "var c=window.__WEBDRIVER__.cookies[{name_json}];\
+         return c||null"
+    );
+    let result = eval_js(&state.app, None, &script).await?;
+    Ok(Json(json!({"cookie": result})))
+}
+
+async fn cookie_add<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(body): Json<CookieAddReq>,
+) -> ApiResult {
+    let c = &body.cookie;
+    let name_json = serde_json::to_string(&c.name).unwrap();
+    let value_json = serde_json::to_string(&c.value).unwrap();
+    let path_json = serde_json::to_string(&c.path).unwrap();
+    let domain_json = match &c.domain {
+        Some(d) => serde_json::to_string(d).unwrap(),
+        None => "window.location.hostname".to_string(),
+    };
+    let secure = c.secure;
+    let http_only = c.http_only;
+    let expiry_js = match c.expiry {
+        Some(e) => format!("{e}"),
+        None => "null".to_string(),
+    };
+
+    let script = format!(
+        "window.__WEBDRIVER__.cookies[{name_json}]={{\
+         name:{name_json},value:{value_json},path:{path_json},\
+         domain:{domain_json},secure:{secure},httpOnly:{http_only},\
+         expiry:{expiry_js},sameSite:\"Lax\"\
+         }};return null"
+    );
+
+    eval_js(&state.app, None, &script).await?;
+    Ok(Json(json!(null)))
+}
+
+async fn cookie_delete<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(body): Json<CookieNameReq>,
+) -> ApiResult {
+    let name_json = serde_json::to_string(&body.name).unwrap();
+    let script = format!(
+        "delete window.__WEBDRIVER__.cookies[{name_json}];return null"
+    );
+    eval_js(&state.app, None, &script).await?;
+    Ok(Json(json!(null)))
+}
+
+async fn cookie_delete_all<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(_body): Json<Value>,
+) -> ApiResult {
+    let script = "var s=window.__WEBDRIVER__.cookies;\
+         var k=Object.keys(s);for(var i=0;i<k.length;i++)delete s[k[i]];\
+         return null";
+    eval_js(&state.app, None, script).await?;
+    Ok(Json(json!(null)))
+}
+
+// --- Action handlers ---
+
+async fn actions_perform<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(body): Json<Value>,
+) -> ApiResult {
+    let action_sequences = body
+        .get("actions")
+        .and_then(|a| a.as_array())
+        .ok_or_else(|| ApiError::Internal("Missing 'actions' array".into()))?;
+
+    // Determine the number of ticks (max length across all action sequences).
+    let tick_count = action_sequences
+        .iter()
+        .filter_map(|seq| seq.get("actions").and_then(|a| a.as_array()).map(|a| a.len()))
+        .max()
+        .unwrap_or(0);
+
+    // Process each tick across all input sources.
+    for tick_idx in 0..tick_count {
+        let mut js_parts: Vec<String> = Vec::new();
+        let mut pause_ms: u64 = 0;
+
+        for seq in action_sequences {
+            let source_type = seq.get("type").and_then(|t| t.as_str()).unwrap_or("null");
+            let actions_arr = match seq.get("actions").and_then(|a| a.as_array()) {
+                Some(a) => a,
+                None => continue,
+            };
+            let action = match actions_arr.get(tick_idx) {
+                Some(a) => a,
+                None => continue,
+            };
+            let action_type = action
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("pause");
+
+            match (source_type, action_type) {
+                ("key", "keyDown") => {
+                    let key = action
+                        .get("value")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let key_json = serde_json::to_string(key).unwrap();
+                    js_parts.push(format!(
+                        "(function(){{var k={key_json};\
+                         var code=k.length===1?'Key'+k.toUpperCase():k;\
+                         var tgt=document.activeElement||document.body;\
+                         tgt.dispatchEvent(new KeyboardEvent('keydown',\
+                         {{key:k,code:code,bubbles:true,cancelable:true}}))}})();"
+                    ));
+                }
+                ("key", "keyUp") => {
+                    let key = action
+                        .get("value")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let key_json = serde_json::to_string(key).unwrap();
+                    js_parts.push(format!(
+                        "(function(){{var k={key_json};\
+                         var code=k.length===1?'Key'+k.toUpperCase():k;\
+                         var tgt=document.activeElement||document.body;\
+                         tgt.dispatchEvent(new KeyboardEvent('keyup',\
+                         {{key:k,code:code,bubbles:true,cancelable:true}}))}})();"
+                    ));
+                }
+                ("pointer", "pointerMove") => {
+                    let x = action.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let y = action.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let origin = action
+                        .get("origin")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("viewport");
+
+                    // If origin is an element object, resolve its center.
+                    if let Some(origin_obj) =
+                        action.get("origin").and_then(|v| v.as_object())
+                    {
+                        if let Some(elem) =
+                            origin_obj.values().next().and_then(|v| v.as_object())
+                        {
+                            let sel = elem
+                                .get("selector")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("");
+                            let idx = elem
+                                .get("index")
+                                .and_then(|i| i.as_u64())
+                                .unwrap_or(0);
+                            let sel_json = serde_json::to_string(sel).unwrap();
+                            js_parts.push(format!(
+                                "(function(){{var el=document.querySelectorAll({sel_json})[{idx}];\
+                                 if(el){{var r=el.getBoundingClientRect();\
+                                 window.__wdPointerX=r.x+r.width/2+{x};\
+                                 window.__wdPointerY=r.y+r.height/2+{y};}}}})();"
+                            ));
+                        }
+                    } else {
+                        match origin {
+                            "pointer" => {
+                                js_parts.push(format!(
+                                    "window.__wdPointerX=(window.__wdPointerX||0)+{x};\
+                                     window.__wdPointerY=(window.__wdPointerY||0)+{y};"
+                                ));
+                            }
+                            _ => {
+                                // "viewport" or any other value
+                                js_parts.push(format!(
+                                    "window.__wdPointerX={x};window.__wdPointerY={y};"
+                                ));
+                            }
+                        }
+                    }
+
+                    // Dispatch mousemove event.
+                    js_parts.push(
+                        "(function(){var tgt=document.elementFromPoint(\
+                         window.__wdPointerX||0,window.__wdPointerY||0)||document.body;\
+                         tgt.dispatchEvent(new MouseEvent('mousemove',\
+                         {clientX:window.__wdPointerX||0,clientY:window.__wdPointerY||0,\
+                         bubbles:true,cancelable:true}))})();"
+                            .to_string(),
+                    );
+                }
+                ("pointer", "pointerDown") => {
+                    let button =
+                        action.get("button").and_then(|v| v.as_u64()).unwrap_or(0);
+                    js_parts.push(format!(
+                        "(function(){{var tgt=document.elementFromPoint(\
+                         window.__wdPointerX||0,window.__wdPointerY||0)||document.body;\
+                         tgt.dispatchEvent(new MouseEvent('mousedown',\
+                         {{clientX:window.__wdPointerX||0,clientY:window.__wdPointerY||0,\
+                         button:{button},bubbles:true,cancelable:true}}))}})();"
+                    ));
+                }
+                ("pointer", "pointerUp") => {
+                    let button =
+                        action.get("button").and_then(|v| v.as_u64()).unwrap_or(0);
+                    js_parts.push(format!(
+                        "(function(){{var tgt=document.elementFromPoint(\
+                         window.__wdPointerX||0,window.__wdPointerY||0)||document.body;\
+                         tgt.dispatchEvent(new MouseEvent('mouseup',\
+                         {{clientX:window.__wdPointerX||0,clientY:window.__wdPointerY||0,\
+                         button:{button},bubbles:true,cancelable:true}}));\
+                         tgt.dispatchEvent(new MouseEvent('click',\
+                         {{clientX:window.__wdPointerX||0,clientY:window.__wdPointerY||0,\
+                         button:{button},bubbles:true,cancelable:true}}))}})();"
+                    ));
+                }
+                ("wheel", "scroll") => {
+                    let x = action.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let y = action.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let delta_x =
+                        action.get("deltaX").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let delta_y =
+                        action.get("deltaY").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    js_parts.push(format!(
+                        "(function(){{var tgt=document.elementFromPoint({x},{y})||document.body;\
+                         tgt.dispatchEvent(new WheelEvent('wheel',\
+                         {{clientX:{x},clientY:{y},deltaX:{delta_x},deltaY:{delta_y},\
+                         bubbles:true,cancelable:true}}))}})();"
+                    ));
+                }
+                (_, "pause") => {
+                    let d = action
+                        .get("duration")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    if d > pause_ms {
+                        pause_ms = d;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Execute the JS for this tick.
+        if !js_parts.is_empty() {
+            let combined = js_parts.join("");
+            let script = format!("{combined}return null");
+            eval_js(&state.app, None, &script).await?;
+        }
+
+        // Apply pause duration for this tick.
+        if pause_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(pause_ms)).await;
+        }
+    }
+
+    Ok(Json(json!(null)))
+}
+
+async fn actions_release<R: Runtime>(
+    AxumState(_state): AxumState<SharedState<R>>,
+    Json(_body): Json<Value>,
+) -> ApiResult {
+    // Release all held keys and pointer buttons. Currently returns null
+    // as the plugin does not track pressed state across requests.
+    Ok(Json(json!(null)))
+}
+
 // --- Server entry point ---
 
 pub(crate) async fn start<R: Runtime>(
@@ -846,6 +1164,15 @@ pub(crate) async fn start<R: Runtime>(
         // Screenshots
         .route("/screenshot", post(screenshot::<R>))
         .route("/screenshot/element", post(screenshot_element::<R>))
+        // Cookies
+        .route("/cookie/get-all", post(cookie_get_all::<R>))
+        .route("/cookie/get", post(cookie_get::<R>))
+        .route("/cookie/add", post(cookie_add::<R>))
+        .route("/cookie/delete", post(cookie_delete::<R>))
+        .route("/cookie/delete-all", post(cookie_delete_all::<R>))
+        // Actions
+        .route("/actions/perform", post(actions_perform::<R>))
+        .route("/actions/release", post(actions_release::<R>))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

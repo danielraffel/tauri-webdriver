@@ -90,6 +90,8 @@ npx wdio run wdio.conf.mjs
 | **Scripts** | Execute Sync, Execute Async | Done |
 | **Navigation** | Get URL, Get Title, Navigate, Back, Forward, Refresh | Done |
 | **Screenshots** | Take Screenshot, Element Screenshot | Done |
+| **Cookies** | Get All, Get Named, Add, Delete, Delete All | Done |
+| **Actions** | Key (keyDown/keyUp), Pointer (move/down/up), Wheel (scroll) | Done |
 
 ## MCP Integration
 

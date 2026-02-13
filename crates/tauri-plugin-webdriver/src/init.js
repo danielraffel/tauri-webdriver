@@ -73,5 +73,10 @@
       writable: false,
       configurable: false,
     },
+    cookies: {
+      value: Object.create(null),
+      writable: false,
+      configurable: false,
+    },
   });
 })();

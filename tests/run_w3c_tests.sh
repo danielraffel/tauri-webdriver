@@ -109,6 +109,10 @@ run_test "GET window handle" "GET" "/session/$SESSION_ID/window" "" '"main"'
 run_test "GET window handles" "GET" "/session/$SESSION_ID/window/handles" "" '"main"'
 run_test "GET window rect" "GET" "/session/$SESSION_ID/window/rect" "" '"width"'
 run_test "SET window rect" "POST" "/session/$SESSION_ID/window/rect" '{"width":1024,"height":768}' '"width"'
+run_test "Maximize window" "POST" "/session/$SESSION_ID/window/maximize" "" '"width"'
+run_test "Minimize window" "POST" "/session/$SESSION_ID/window/minimize" "" '"width"'
+sleep 0.5
+run_test "Fullscreen window" "POST" "/session/$SESSION_ID/window/fullscreen" "" '"width"'
 
 echo ""
 echo "=== Navigation ==="
@@ -148,6 +152,7 @@ if [ -n "$TITLE_EID" ]; then
   run_test "Get tag name (#title)" "GET" "/session/$SESSION_ID/element/$TITLE_EID/name" "" '"h1"'
   run_test "Get attribute id" "GET" "/session/$SESSION_ID/element/$TITLE_EID/attribute/id" "" '"title"'
   run_test "Get property tagName" "GET" "/session/$SESSION_ID/element/$TITLE_EID/property/tagName" "" '"H1"'
+  run_test "Get attribute (missing)" "GET" "/session/$SESSION_ID/element/$TITLE_EID/attribute/data-nonexistent" "" 'null'
   run_test "Get element rect" "GET" "/session/$SESSION_ID/element/$TITLE_EID/rect" "" '"width"'
 fi
 
@@ -189,6 +194,7 @@ run_test "Execute sync (1+1)" "POST" "/session/$SESSION_ID/execute/sync" '{"scri
 run_test "Execute sync (title)" "POST" "/session/$SESSION_ID/execute/sync" '{"script":"return document.title","args":[]}' '"WebDriver Test App"'
 run_test "Execute sync (with args)" "POST" "/session/$SESSION_ID/execute/sync" '{"script":"return arguments[0]+arguments[1]","args":[10,20]}' '"value":30'
 run_test "Execute async" "POST" "/session/$SESSION_ID/execute/async" '{"script":"var done=arguments[arguments.length-1];setTimeout(function(){done(99)},100)","args":[]}' '"value":99'
+run_test "Execute sync (error)" "POST" "/session/$SESSION_ID/execute/sync" '{"script":"throw new Error(\"test error\")","args":[]}' '"javascript error"'
 
 echo ""
 echo "=== Timeouts ==="
@@ -202,6 +208,33 @@ run_test "Full page screenshot" "GET" "/session/$SESSION_ID/screenshot" "" '"val
 if [ -n "$TITLE_EID" ]; then
   run_test "Element screenshot (#title)" "GET" "/session/$SESSION_ID/element/$TITLE_EID/screenshot" "" '"value"'
 fi
+
+echo ""
+echo "=== Cookies ==="
+run_test "GET cookies (initially)" "GET" "/session/$SESSION_ID/cookie" "" '"value"'
+
+run_test "POST cookie (add testcookie)" "POST" "/session/$SESSION_ID/cookie" '{"cookie":{"name":"testcookie","value":"testvalue","path":"/"}}' 'null'
+sleep 0.3
+
+run_test "GET cookies (has testcookie)" "GET" "/session/$SESSION_ID/cookie" "" '"testcookie"'
+
+run_test "GET cookie by name (testcookie)" "GET" "/session/$SESSION_ID/cookie/testcookie" "" '"testvalue"'
+
+run_test "DELETE cookie (testcookie)" "DELETE" "/session/$SESSION_ID/cookie/testcookie" "" 'null'
+sleep 0.3
+
+run_test "GET cookies (after delete)" "GET" "/session/$SESSION_ID/cookie" "" '"value"'
+
+echo ""
+echo "=== Perform Actions ==="
+# Key action: type a character
+run_test "Key actions (type 'x')" "POST" "/session/$SESSION_ID/actions" '{"actions":[{"type":"key","id":"k1","actions":[{"type":"keyDown","value":"x"},{"type":"keyUp","value":"x"}]}]}' 'null'
+
+# Pointer action: click at position
+run_test "Pointer actions (click)" "POST" "/session/$SESSION_ID/actions" '{"actions":[{"type":"pointer","id":"m1","parameters":{"pointerType":"mouse"},"actions":[{"type":"pointerMove","x":100,"y":100,"origin":"viewport","duration":0},{"type":"pointerDown","button":0},{"type":"pointerUp","button":0}]}]}' 'null'
+
+# Release actions
+run_test "Release actions" "DELETE" "/session/$SESSION_ID/actions" "" 'null'
 
 echo ""
 echo "=== Session Cleanup ==="

@@ -115,6 +115,22 @@ run_test "Full page screenshot" "/screenshot" "{}" '"data"'
 run_test "Element screenshot (#title)" "/screenshot/element" '{"selector":"#title","index":0}' '"data"'
 
 echo ""
+echo "=== Cookies ==="
+run_test "Get all cookies (empty)" "/cookie/get-all" "{}" '"cookies"'
+run_test "Add cookie" "/cookie/add" '{"cookie":{"name":"testcookie","value":"testvalue","path":"/"}}' 'null'
+sleep 0.3
+run_test "Get cookie by name" "/cookie/get" '{"name":"testcookie"}' '"testvalue"'
+run_test "Get all cookies (has cookie)" "/cookie/get-all" "{}" '"testcookie"'
+run_test "Delete cookie by name" "/cookie/delete" '{"name":"testcookie"}' 'null'
+sleep 0.3
+run_test "Get cookie after delete" "/cookie/get" '{"name":"testcookie"}' 'null'
+run_test "Add cookie for delete-all" "/cookie/add" '{"cookie":{"name":"cookie1","value":"val1","path":"/"}}' 'null'
+sleep 0.3
+run_test "Delete all cookies" "/cookie/delete-all" "{}" 'null'
+sleep 0.3
+run_test "Get all after delete-all" "/cookie/get-all" "{}" '"cookies"'
+
+echo ""
 echo "=================================="
 echo "Results: $PASS passed, $FAIL failed"
 echo "=================================="

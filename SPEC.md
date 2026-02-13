@@ -349,16 +349,16 @@ Standard W3C error codes:
 - [x] CSS selector + XPath support
 - [x] Integration test: navigate, execute script, take screenshot
 
-### Phase 4: Robustness + Compatibility (partial)
+### Phase 4: Robustness + Compatibility
 **Goal:** Production-quality. Drop-in replacement for existing setups.
 
 - [x] Configurable timeouts (W3C GET/POST /session/{id}/timeouts)
 - [x] Send keys / clear
-- [ ] Cookie operations
-- [ ] Perform actions (pointer/keyboard)
+- [x] Cookie operations (in-memory store for `tauri://` scheme compatibility)
+- [x] Perform actions (pointer/keyboard/wheel via JS event dispatch)
 - [x] Graceful shutdown + process cleanup (SIGINT/SIGTERM handling)
-- [ ] W3C compliance test suite
-- [ ] WDIO compatibility verification
+- [x] W3C compliance test suite (57 tests)
+- [x] WDIO compatibility test suite (22 specs across 6 files)
 - [x] Structured logging
 - [ ] CI pipeline (build, test, release)
 
@@ -381,3 +381,45 @@ Standard W3C error codes:
 - No cloud dependencies or external accounts required
 - Direct 2-hop architecture (CLI → plugin)
 - Documented and tested on macOS
+
+---
+
+## Future Considerations
+
+Ideas for future development, roughly ordered by impact.
+
+### Multi-session support
+Currently the CLI supports a single active session. Supporting multiple concurrent sessions would allow parallel test execution. Each session would need its own app process, plugin port, and element map.
+
+### Multi-window / multi-webview support
+The plugin resolves windows by label (defaulting to `"main"`). Full W3C `Switch To Window` support would allow tests to interact with secondary windows and multi-webview Tauri apps.
+
+### Native screenshot via `CGWindowListCreateImage`
+The current screenshot approach (SVG foreignObject → Canvas) cannot capture content outside the DOM (native title bars, system dialogs, CSS `backdrop-filter` effects). A native macOS screenshot using `CGWindowListCreateImage` via Tauri's Objective-C bridge would produce pixel-accurate captures.
+
+### Frame / iframe support
+W3C WebDriver defines `Switch To Frame` and `Switch To Parent Frame`. The plugin currently evaluates JS in the top-level document only. Supporting frames requires targeting `contentDocument` of iframe elements.
+
+### Alert / dialog handling
+W3C endpoints for `Accept Alert`, `Dismiss Alert`, `Get Alert Text`, `Send Alert Text`. Requires intercepting `window.alert()`, `window.confirm()`, `window.prompt()` via JS injection before the page loads.
+
+### Shadow DOM support
+Elements inside shadow roots are not reachable via `document.querySelectorAll()`. A `shadow` locator strategy or recursive shadow DOM traversal in `findElement` would extend reach into web component internals.
+
+### File upload support
+W3C `Element Send Keys` on `<input type="file">` should trigger a file upload. This requires special handling since setting `.value` on file inputs is blocked by browsers for security.
+
+### Persistent cookies via `WKHTTPCookieStore`
+The current in-memory cookie store works for testing but doesn't survive page navigations that clear JS state. Using WKWebView's native `WKHTTPCookieStore` API via Tauri's Objective-C bridge would provide persistent, spec-compliant cookie behavior.
+
+### Linux / Windows support
+The plugin and CLI are platform-agnostic Rust, but testing has only been done on macOS. Linux (WebKitGTK) and Windows (WebView2) use different webview engines. Screenshots and window insets may need platform-specific adjustments.
+
+### CI pipeline
+GitHub Actions workflow on `macos-latest` to build both crates, build the test app, run plugin tests, run W3C tests, and run WDIO compatibility tests on every push/PR.
+
+### `cargo install` / crates.io publishing
+Publish `tauri-plugin-webdriver` and `tauri-webdriver` to crates.io so users can `cargo add tauri-plugin-webdriver` and `cargo install tauri-webdriver` without cloning the repo.
+
+### Page source endpoint
+W3C `GET /session/{id}/source` to return the full HTML of the current page via `document.documentElement.outerHTML`.
