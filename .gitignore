@@ -1,3 +1,4 @@
 /target
 tests/test-app/src-tauri/target
 .DS_Store
+screenshots/
