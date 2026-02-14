@@ -77,3 +77,21 @@ Minimal Tauri app with testable elements (counter button, text input, dropdown, 
 - **Print to PDF**: Plugin `/print` uses the same SVG foreignObject approach as screenshots, then wraps the rendered PNG in a minimal PDF 1.4 structure. Returns base64-encoded PDF.
 - **Error mapping**: Plugin HTTP 500 → `W3cError`. Script execution errors specifically map to `"javascript error"` W3C error code.
 - **Debug-only plugin**: The plugin should only be registered in debug builds via `#[cfg(debug_assertions)]`.
+
+## Releasing
+
+When pushing changes that affect the crates, bump the version in both `Cargo.toml` files and publish to crates.io:
+
+```sh
+# 1. Bump version in both:
+#    crates/tauri-plugin-webdriver-automation/Cargo.toml
+#    crates/tauri-webdriver-automation/Cargo.toml
+
+# 2. Commit and push to GitHub
+
+# 3. Publish plugin first (CLI depends on it indirectly via the test app)
+cd crates/tauri-plugin-webdriver-automation && cargo publish
+cd crates/tauri-webdriver-automation && cargo publish
+```
+
+Keep both crate versions in sync.

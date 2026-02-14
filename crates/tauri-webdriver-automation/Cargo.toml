@@ -1,6 +1,6 @@
 [package]
 name = "tauri-webdriver-automation"
-version = "0.1.1"
+version = "0.1.2"
 description = "Open-source macOS WebDriver server for Tauri apps"
 authors = ["Generous Corp"]
 edition.workspace = true
