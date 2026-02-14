@@ -531,3 +531,20 @@ The plugin and CLI are platform-agnostic Rust, but testing has only been done on
 
 ### Multi-window / multi-webview support
 The plugin resolves windows by label (defaulting to `"main"`). Basic `Switch To Window` is implemented. Full multi-webview support for complex Tauri apps with multiple webview windows would extend the current single-label tracking.
+
+---
+
+### ~~Frame / iframe support~~ ✓
+Implemented. `Switch To Frame` (by index, element, or null) and `Switch To Parent Frame` are supported. JS evaluation is scoped to the target frame via `contentDocument` navigation.
+
+### ~~Shadow DOM support~~ ✓
+Implemented. `Get Shadow Root`, `Find Element In Shadow`, and `Find Elements In Shadow` are supported. Shadow-internal elements are cached in `window.__WEBDRIVER__.__shadowCache` to bypass `document.querySelectorAll()` limitations.
+
+### ~~Page source endpoint~~ ✓
+Implemented. `GET /session/{id}/source` returns the full page HTML via `document.documentElement.outerHTML`.
+
+### ~~CI pipeline~~ ✓
+GitHub Actions workflow on `macos-latest` builds both crates, builds the test app, and runs plugin + W3C tests on every push/PR.
+
+### ~~`cargo install` / crates.io publishing~~ ✓
+Both crates published: `cargo add tauri-plugin-webdriver-automation` and `cargo install tauri-webdriver-automation`.
