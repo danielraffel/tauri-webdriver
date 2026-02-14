@@ -102,13 +102,14 @@ npx vite --port 5173          # Vite
 # npx webpack serve            # Webpack
 ```
 
-To have your agent (Claude Code, Codex, etc) handle this automatically, add a note to your project's `CLAUDE.md` or `AGENTS.md`:
+To have your agent (Claude Code, Codex, etc) handle this automatically, add a note to your project's `CLAUDE.md` or `AGENTS.md`. Starting a dev server on a port that's already in use may prompt interactively and hang automated tools, so check first and only start if needed:
 
 ```md
 ## WebDriver Automation
-The Tauri debug binary loads the frontend from devUrl, so the dev server
-must be running before tauri-wd launches the app:
-cd apps/desktop && npx vite --port 5173
+The Tauri debug binary loads the frontend from devUrl. Before launching
+the app with tauri-wd, ensure these are running:
+curl -s http://127.0.0.1:5173 > /dev/null 2>&1 || (cd apps/desktop && npx vite --port 5173 &)
+curl -s http://127.0.0.1:4444/status > /dev/null 2>&1 || tauri-wd --port 4444 &
 ```
 
 ### 5. Run tests
