@@ -110,7 +110,7 @@ All operations follow the [W3C WebDriver specification](https://www.w3.org/TR/we
 | W3C Endpoint | Method | Description |
 |-------------|--------|-------------|
 | `/status` | GET | Server readiness status |
-| `/session` | POST | [Create a new session](https://github.com/danielraffel/tauri-webdriver/blob/main/SPEC.md#session-creation-flow) with `tauri:options` capabilities |
+| `/session` | POST | Create a new session with `tauri:options` capabilities |
 | `/session/{id}` | DELETE | Delete session and terminate the app |
 | `/session/{id}/timeouts` | GET | Get current timeout configuration |
 | `/session/{id}/timeouts` | POST | Set implicit, page load, and script timeouts |
@@ -119,7 +119,7 @@ All operations follow the [W3C WebDriver specification](https://www.w3.org/TR/we
 
 | W3C Endpoint | Method | Description |
 |-------------|--------|-------------|
-| `/session/{id}/url` | POST | [Navigate to URL](https://github.com/danielraffel/tauri-webdriver/blob/main/SPEC.md#navigation) |
+| `/session/{id}/url` | POST | Navigate to URL |
 | `/session/{id}/url` | GET | Get current page URL |
 | `/session/{id}/title` | GET | Get page title |
 | `/session/{id}/source` | GET | Get full page HTML source |
@@ -131,7 +131,7 @@ All operations follow the [W3C WebDriver specification](https://www.w3.org/TR/we
 
 | W3C Endpoint | Method | Description |
 |-------------|--------|-------------|
-| `/session/{id}/window` | GET | [Get current window handle](https://github.com/danielraffel/tauri-webdriver/blob/main/SPEC.md#window) |
+| `/session/{id}/window` | GET | Get current window handle |
 | `/session/{id}/window` | POST | Switch to window by handle |
 | `/session/{id}/window` | DELETE | Close current window |
 | `/session/{id}/window/handles` | GET | Get all window handles |
@@ -146,7 +146,7 @@ All operations follow the [W3C WebDriver specification](https://www.w3.org/TR/we
 
 | W3C Endpoint | Method | Description |
 |-------------|--------|-------------|
-| `/session/{id}/element` | POST | [Find element](https://github.com/danielraffel/tauri-webdriver/blob/main/SPEC.md#elements) (CSS, XPath, tag name, link text, partial link text) |
+| `/session/{id}/element` | POST | Find element (CSS, XPath, tag name, link text, partial link text) |
 | `/session/{id}/elements` | POST | Find all matching elements |
 | `/session/{id}/element/active` | GET | Get the currently focused element |
 | `/session/{id}/element/{eid}/element` | POST | Find element scoped to a parent element |
@@ -170,7 +170,7 @@ All operations follow the [W3C WebDriver specification](https://www.w3.org/TR/we
 
 | W3C Endpoint | Method | Description |
 |-------------|--------|-------------|
-| `/session/{id}/element/{eid}/shadow` | GET | [Get shadow root](https://github.com/danielraffel/tauri-webdriver/blob/main/SPEC.md#shadow-dom) of a web component |
+| `/session/{id}/element/{eid}/shadow` | GET | Get shadow root of a web component |
 | `/session/{id}/shadow/{sid}/element` | POST | Find element inside a shadow root |
 | `/session/{id}/shadow/{sid}/elements` | POST | Find all elements inside a shadow root |
 
@@ -178,28 +178,28 @@ All operations follow the [W3C WebDriver specification](https://www.w3.org/TR/we
 
 | W3C Endpoint | Method | Description |
 |-------------|--------|-------------|
-| `/session/{id}/frame` | POST | [Switch to frame](https://github.com/danielraffel/tauri-webdriver/blob/main/SPEC.md#frames) by index, element reference, or `null` for top |
+| `/session/{id}/frame` | POST | Switch to frame by index, element reference, or `null` for top |
 | `/session/{id}/frame/parent` | POST | Switch to parent frame |
 
 ### Script Execution
 
 | W3C Endpoint | Method | Description |
 |-------------|--------|-------------|
-| `/session/{id}/execute/sync` | POST | [Execute synchronous JavaScript](https://github.com/danielraffel/tauri-webdriver/blob/main/SPEC.md#script-execution) |
+| `/session/{id}/execute/sync` | POST | Execute synchronous JavaScript |
 | `/session/{id}/execute/async` | POST | Execute asynchronous JavaScript with callback |
 
 ### Screenshots
 
 | W3C Endpoint | Method | Description |
 |-------------|--------|-------------|
-| `/session/{id}/screenshot` | GET | [Full page screenshot](https://github.com/danielraffel/tauri-webdriver/blob/main/SPEC.md#screenshots) (base64 PNG) |
+| `/session/{id}/screenshot` | GET | Full page screenshot (base64 PNG) |
 | `/session/{id}/element/{eid}/screenshot` | GET | Element screenshot (base64 PNG) |
 
 ### Cookies
 
 | W3C Endpoint | Method | Description |
 |-------------|--------|-------------|
-| `/session/{id}/cookie` | GET | [Get all cookies](https://github.com/danielraffel/tauri-webdriver/blob/main/SPEC.md#cookies) |
+| `/session/{id}/cookie` | GET | Get all cookies |
 | `/session/{id}/cookie/{name}` | GET | Get a cookie by name |
 | `/session/{id}/cookie` | POST | Add a cookie |
 | `/session/{id}/cookie/{name}` | DELETE | Delete a cookie by name |
@@ -218,7 +218,7 @@ All operations follow the [W3C WebDriver specification](https://www.w3.org/TR/we
 
 | W3C Endpoint | Method | Description |
 |-------------|--------|-------------|
-| `/session/{id}/actions` | POST | [Perform actions](https://github.com/danielraffel/tauri-webdriver/blob/main/SPEC.md#actions): key (keyDown/keyUp), pointer (move/down/up), wheel (scroll) |
+| `/session/{id}/actions` | POST | Perform actions: key (keyDown/keyUp), pointer (move/down/up), wheel (scroll) |
 | `/session/{id}/actions` | DELETE | Release all actions |
 
 ### Print
