@@ -141,6 +141,25 @@ tauri-wd --port 4444
 
 Then ask Claude: *"Launch my Tauri app and take a screenshot"*
 
+**4. Dev server note:**
+
+If your Tauri app uses a frontend dev server, it must be running before `tauri-wd` launches your app. The debug binary loads your frontend from `devUrl` (e.g., `http://localhost:5173`), not from embedded files.
+
+```sh
+# Start your dev server first (adjust for your setup)
+npx vite --port 5173          # Vite
+# npx next dev --port 3000    # Next.js
+# npx webpack serve            # Webpack
+```
+
+To have Claude Code handle this automatically, add a note to your project's `CLAUDE.md`:
+
+```md
+## WebDriver / MCP Automation
+Before using tauri-wd or MCP tools, start the frontend dev server:
+cd apps/desktop && npx vite --port 5173
+```
+
 > **Note:** [mcp-tauri-automation](https://github.com/danielraffel/mcp-tauri-automation) is a fork of [Radek44/mcp-tauri-automation](https://github.com/Radek44/mcp-tauri-automation) with additional tools (execute_script, get_page_title, get_page_url, multi-strategy selectors, configurable timeouts, wait_for_navigation). These additions have been [submitted upstream](https://github.com/Radek44/mcp-tauri-automation). For cross-platform MCP support, see the [original project](https://github.com/Radek44/mcp-tauri-automation).
 
 ## Supported W3C WebDriver Operations
