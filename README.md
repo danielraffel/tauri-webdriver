@@ -158,6 +158,8 @@ claude mcp add --transport stdio tauri-automation \
 tauri-wd --port 4444
 ```
 
+If your app uses a frontend dev server, make sure it's running first (see [step 4 in Quick Start](#4-start-your-frontend-dev-server)).
+
 Then ask Claude: *"Launch my Tauri app and take a screenshot"*
 
 > **Note:** [mcp-tauri-automation](https://github.com/danielraffel/mcp-tauri-automation) is a fork of [Radek44/mcp-tauri-automation](https://github.com/Radek44/mcp-tauri-automation) with additional tools (execute_script, get_page_title, get_page_url, multi-strategy selectors, configurable timeouts, wait_for_navigation). These additions have been [submitted upstream](https://github.com/Radek44/mcp-tauri-automation). For cross-platform MCP support, see the [original project](https://github.com/Radek44/mcp-tauri-automation).
