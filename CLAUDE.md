@@ -84,18 +84,13 @@ Minimal Tauri app with testable elements (counter button, text input, dropdown, 
 
 ## Releasing
 
-When pushing changes that affect the crates, bump the version in both `Cargo.toml` files and publish to crates.io:
+**IMPORTANT: Whenever you commit changes to source files in `crates/` (Rust code, init.js, Cargo.toml), you MUST also bump the version and publish to crates.io in the same workflow.** Do not push code changes to GitHub without also publishing updated crates. Both crate versions must stay in sync.
 
-```sh
-# 1. Bump version in both:
-#    crates/tauri-plugin-webdriver-automation/Cargo.toml
-#    crates/tauri-webdriver-automation/Cargo.toml
-
-# 2. Commit and push to GitHub
-
-# 3. Publish plugin first (CLI depends on it indirectly via the test app)
-cd crates/tauri-plugin-webdriver-automation && cargo publish
-cd crates/tauri-webdriver-automation && cargo publish
-```
-
-Keep both crate versions in sync.
+Steps:
+1. Bump the `version` field in both `crates/tauri-plugin-webdriver-automation/Cargo.toml` and `crates/tauri-webdriver-automation/Cargo.toml` (same version for both)
+2. Commit the version bump (include Cargo.lock) and push to GitHub
+3. Publish plugin first, then CLI:
+   ```sh
+   cd crates/tauri-plugin-webdriver-automation && cargo publish
+   cd crates/tauri-webdriver-automation && cargo publish
+   ```
