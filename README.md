@@ -12,6 +12,19 @@ Enables automated end-to-end testing of Tauri desktop applications on macOS, whe
 
 _Disclosure: The code for this project was written in collaboration with Claude Code_
 
+## Table of Contents
+
+- [The Problem](#the-problem)
+- [The Solution](#the-solution)
+- [Who Is This For?](#who-is-this-for)
+- [Quick Start](#quick-start)
+- [Supported W3C WebDriver Operations](#supported-w3c-webdriver-operations)
+- [MCP Integration](#mcp-integration)
+- [Architecture](#architecture)
+- [Alternatives](#alternatives)
+- [Additional info](#additional-info)
+- [License](#license)
+
 ## The Problem
 
 Tauri apps use WKWebView on macOS. Unlike Linux (WebKitWebDriver) and Windows (Edge WebDriver), Apple does not provide a WebDriver implementation for WKWebView. This means Tauri developers cannot run automated e2e tests on macOS using standard WebDriver tools like WebDriverIO or Selenium.
