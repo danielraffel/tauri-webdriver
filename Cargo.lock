@@ -3732,7 +3732,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tauri-plugin-webdriver"
+name = "tauri-plugin-webdriver-automation"
 version = "0.1.0"
 dependencies = [
  "axum",
@@ -3835,7 +3835,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tauri-webdriver"
+name = "tauri-webdriver-automation"
 version = "0.1.0"
 dependencies = [
  "axum",

@@ -12,6 +12,6 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-tauri-plugin-webdriver = { path = "../../../crates/tauri-plugin-webdriver" }
+tauri-plugin-webdriver-automation = { path = "../../../crates/tauri-plugin-webdriver-automation" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

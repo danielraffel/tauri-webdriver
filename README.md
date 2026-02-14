@@ -1,5 +1,11 @@
 # tauri-webdriver
 
+[![CI](https://github.com/danielraffel/tauri-webdriver/workflows/CI/badge.svg)](https://github.com/danielraffel/tauri-webdriver/actions)
+[![Crates.io](https://img.shields.io/crates/v/tauri-webdriver-automation.svg)](https://crates.io/crates/tauri-webdriver-automation)
+[![Plugin Crate](https://img.shields.io/crates/v/tauri-plugin-webdriver-automation.svg?label=plugin)](https://crates.io/crates/tauri-plugin-webdriver-automation)
+[![Docs.rs](https://docs.rs/tauri-webdriver-automation/badge.svg)](https://docs.rs/tauri-webdriver-automation)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
+
 **Open-source macOS WebDriver for Tauri apps.**
 
 Enables automated end-to-end testing of Tauri desktop applications on macOS, where no native WKWebView WebDriver exists.
@@ -14,14 +20,14 @@ This is a blocker for any Tauri app with platform-specific code (e.g., deep link
 
 `tauri-webdriver` provides two crates that together bridge the gap:
 
-1. **`tauri-plugin-webdriver`** -- A Tauri plugin that runs inside your app (debug builds only). It starts a local HTTP server that can interact with your app's webview: find elements, click buttons, read text, manage windows, and execute JavaScript.
+1. **`tauri-plugin-webdriver-automation`** -- A Tauri plugin that runs inside your app (debug builds only). It starts a local HTTP server that can interact with your app's webview: find elements, click buttons, read text, manage windows, and execute JavaScript.
 
-2. **`tauri-webdriver`** -- A standalone CLI binary that implements the [W3C WebDriver protocol](https://www.w3.org/TR/webdriver2/). It launches your Tauri app, connects to the plugin's HTTP server, and translates standard WebDriver commands into plugin API calls. WebDriverIO, Selenium, or any W3C-compatible client can connect to it.
+2. **`tauri-webdriver-automation`** (CLI binary: `tauri-wd`) -- A standalone CLI binary that implements the [W3C WebDriver protocol](https://www.w3.org/TR/webdriver2/). It launches your Tauri app, connects to the plugin's HTTP server, and translates standard WebDriver commands into plugin API calls. WebDriverIO, Selenium, or any W3C-compatible client can connect to it.
 
 ```
-WebDriverIO/Selenium                tauri-webdriver CLI              Your Tauri App
-  (test runner)        ──HTTP──>     (W3C WebDriver)    ──HTTP──>   (plugin server)
-                        :4444                                        :{dynamic port}
+WebDriverIO/Selenium                 tauri-wd CLI                Your Tauri App
+  (test runner)        ──HTTP──>    (W3C WebDriver)   ──HTTP──>  (plugin server)
+                        :4444                                     :{dynamic port}
 ```
 
 ## Who Is This For?
@@ -36,7 +42,7 @@ WebDriverIO/Selenium                tauri-webdriver CLI              Your Tauri 
 
 ```sh
 cd src-tauri
-cargo add tauri-plugin-webdriver
+cargo add tauri-plugin-webdriver-automation
 ```
 
 Register it in your app (debug builds only):
@@ -45,14 +51,14 @@ Register it in your app (debug builds only):
 let mut builder = tauri::Builder::default();
 #[cfg(debug_assertions)]
 {
-    builder = builder.plugin(tauri_plugin_webdriver::init());
+    builder = builder.plugin(tauri_plugin_webdriver_automation::init());
 }
 ```
 
 ### 2. Install the CLI
 
 ```sh
-cargo install tauri-webdriver
+cargo install tauri-webdriver-automation
 ```
 
 ### 3. Configure WebDriverIO
@@ -74,7 +80,7 @@ export const config = {
 
 ```sh
 # Terminal 1: Start the WebDriver server
-tauri-webdriver --port 4444
+tauri-wd --port 4444
 
 # Terminal 2: Run your tests
 npx wdio run wdio.conf.mjs
@@ -85,24 +91,28 @@ npx wdio run wdio.conf.mjs
 | Category | Operations | Status |
 |----------|-----------|--------|
 | **Sessions** | Create, Delete, Status, Timeouts | Done |
-| **Elements** | Find (CSS + XPath), Find All, Click, Clear, Send Keys, Get Text, Get Attribute, Get Property, Get Tag Name, Get Rect, Is Displayed, Is Enabled, Is Selected | Done |
-| **Windows** | Get Handle, Get All Handles, Get/Set Rect, Close, Fullscreen, Minimize, Maximize | Done |
+| **Elements** | Find (CSS + XPath), Find All, Find From Element, Click, Clear, Send Keys, Get Text, Get Attribute, Get Property, Get Tag Name, Get Rect, Is Displayed, Is Enabled, Is Selected | Done |
+| **Windows** | Get Handle, Get All Handles, Get/Set Rect, Switch To Window, Close, Fullscreen, Minimize, Maximize | Done |
+| **Frames** | Switch To Frame (by index, element, or null), Switch To Parent Frame | Done |
+| **Shadow DOM** | Get Shadow Root, Find Element In Shadow, Find Elements In Shadow | Done |
 | **Scripts** | Execute Sync, Execute Async | Done |
-| **Navigation** | Get URL, Get Title, Navigate, Back, Forward, Refresh | Done |
+| **Navigation** | Get URL, Get Title, Get Page Source, Navigate, Back, Forward, Refresh | Done |
 | **Screenshots** | Take Screenshot, Element Screenshot | Done |
 | **Cookies** | Get All, Get Named, Add, Delete, Delete All | Done |
 | **Actions** | Key (keyDown/keyUp), Pointer (move/down/up), Wheel (scroll) | Done |
+| **ARIA** | Computed Role, Computed Label | Done |
+| **Active Element** | Get Active Element | Done |
 
 ## MCP Integration
 
 `tauri-webdriver` works with [mcp-tauri-automation](https://github.com/Radek44/mcp-tauri-automation) to enable AI-driven automation of Tauri apps via the [Model Context Protocol](https://modelcontextprotocol.io/). This lets AI agents (like Claude Code) launch, inspect, interact with, and screenshot your Tauri app.
 
 ```sh
-# 1. Start tauri-webdriver
-tauri-webdriver --port 4444
+# 1. Start tauri-wd
+tauri-wd --port 4444
 
 # 2. Configure mcp-tauri-automation in your MCP client
-# The MCP server connects to tauri-webdriver on port 4444
+# The MCP server connects to tauri-wd on port 4444
 # and exposes tools like launch_app, click_element, capture_screenshot, etc.
 ```
 

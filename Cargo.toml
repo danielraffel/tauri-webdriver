@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/tauri-plugin-webdriver",
-    "crates/tauri-webdriver",
+    "crates/tauri-plugin-webdriver-automation",
+    "crates/tauri-webdriver-automation",
 ]
 exclude = [
     "tests/test-app/src-tauri",

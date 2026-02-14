@@ -67,6 +67,10 @@ run_test "GET window rect" "/window/rect" "{}" '"width"'
 run_test "GET window insets" "/window/insets" "{}" '"top"'
 
 echo ""
+echo "=== Switch To Window ==="
+run_test "Switch to main window" "/window/set-current" '{"label":"main"}' 'true'
+
+echo ""
 echo "=== Element Finding ==="
 run_test "Find element by CSS (#title)" "/element/find" '{"using":"css","value":"#title"}' '"elements"'
 run_test "Find multiple elements (option)" "/element/find" '{"using":"css","value":"option"}' '"index":1'
@@ -108,6 +112,43 @@ echo ""
 echo "=== Navigation ==="
 run_test "Get page title" "/navigate/title" "{}" '"WebDriver Test App"'
 run_test "Get current URL" "/navigate/current" "{}" '"url"'
+
+echo ""
+echo "=== Page Source ==="
+run_test "Get page source" "/source" "{}" '"<html'
+
+echo ""
+echo "=== Shadow DOM ==="
+run_test "Check shadow root exists" "/element/shadow" '{"selector":"#shadow-host","index":0}' '"hasShadow":true'
+run_test "Find in shadow root" "/shadow/find" '{"host_selector":"#shadow-host","host_index":0,"using":"css","value":".shadow-text"}' '"elements"'
+
+echo ""
+echo "=== Frames ==="
+run_test "Switch to frame by index" "/frame/switch" '{"id":0}' 'null'
+run_test "Find element in frame" "/element/find" '{"using":"css","value":"#frame-title"}' '"elements"'
+run_test "Get text in frame (#frame-title)" "/element/text" '{"selector":"#frame-title","index":0}' '"Inside Frame"'
+run_test "Switch to parent frame" "/frame/parent" '{}' 'null'
+run_test "Find element after parent switch" "/element/find" '{"using":"css","value":"#title"}' '"elements"'
+run_test "Get text after parent (#title)" "/element/text" '{"selector":"#title","index":0}' '"Test App"'
+run_test "Switch to frame again" "/frame/switch" '{"id":0}' 'null'
+run_test "Switch to top (null)" "/frame/switch" '{"id":null}' 'null'
+run_test "Find element after top switch" "/element/find" '{"using":"css","value":"#title"}' '"elements"'
+
+echo ""
+echo "=== Find Element From Element ==="
+run_test "Find options within dropdown" "/element/find-from" '{"parent_selector":"#dropdown","parent_index":0,"using":"css","value":"option"}' '"elements"'
+
+echo ""
+echo "=== Computed ARIA Role + Label ==="
+run_test "Computed role of button" "/element/computed-role" '{"selector":"#increment","index":0}' '"button"'
+run_test "Computed role of h1" "/element/computed-role" '{"selector":"#title","index":0}' '"heading"'
+run_test "Computed label of text-input" "/element/computed-label" '{"selector":"#text-input","index":0}' '"Enter text"'
+
+echo ""
+echo "=== Active Element ==="
+run_test "Click text-input to focus" "/element/click" '{"selector":"#text-input","index":0}' 'null'
+sleep 0.2
+run_test "Get active element" "/element/active" "{}" '"selector"'
 
 echo ""
 echo "=== Screenshots ==="

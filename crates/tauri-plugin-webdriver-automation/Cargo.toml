@@ -1,12 +1,17 @@
 [package]
-name = "tauri-plugin-webdriver"
+name = "tauri-plugin-webdriver-automation"
 version = "0.1.0"
 description = "Tauri plugin that enables WebDriver-based e2e testing on macOS"
-links = "tauri-plugin-webdriver"
+authors = ["Generous Corp"]
+links = "tauri-plugin-webdriver-automation"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+keywords = ["tauri", "webdriver", "testing", "automation", "e2e"]
+categories = ["development-tools::testing", "gui"]
+homepage = "https://github.com/danielraffel/tauri-webdriver"
+readme = "../../README.md"
 
 [dependencies]
 axum = { workspace = true }

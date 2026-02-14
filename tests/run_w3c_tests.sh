@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-CLI_BIN="/Users/danielraffel/Code/tauri-webdriver/target/debug/tauri-webdriver"
+CLI_BIN="/Users/danielraffel/Code/tauri-webdriver/target/debug/tauri-wd"
 APP_BIN="/Users/danielraffel/Code/tauri-webdriver/tests/test-app/src-tauri/target/debug/webdriver-test-app"
 PORT=4444
 BASE="http://127.0.0.1:$PORT"
@@ -67,8 +67,23 @@ else:
   eval "$var_name='$eid'"
 }
 
+extract_shadow_id() {
+  local var_name="$1"
+  local sid=$(cat /tmp/tauri-webdriver-last-result | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+v=d.get('value',{})
+key='shadow-6066-11e4-a52e-4f735466cecf'
+if key in v:
+  print(v[key])
+else:
+  print('')
+" 2>/dev/null)
+  eval "$var_name='$sid'"
+}
+
 # Start CLI server in background
-echo "Starting tauri-webdriver CLI on port $PORT..."
+echo "Starting tauri-wd CLI on port $PORT..."
 $CLI_BIN --port $PORT --log-level debug &
 CLI_PID=$!
 sleep 1
@@ -115,9 +130,37 @@ sleep 0.5
 run_test "Fullscreen window" "POST" "/session/$SESSION_ID/window/fullscreen" "" '"width"'
 
 echo ""
+echo "=== Switch To Window ==="
+run_test "Switch to main window" "POST" "/session/$SESSION_ID/window" '{"handle":"main"}' 'null'
+run_test "Switch to nonexistent window" "POST" "/session/$SESSION_ID/window" '{"handle":"nonexistent"}' '"no such window"'
+
+echo ""
 echo "=== Navigation ==="
 run_test "GET title" "GET" "/session/$SESSION_ID/title" "" '"WebDriver Test App"'
 run_test "GET url" "GET" "/session/$SESSION_ID/url" "" 'tauri'
+
+echo ""
+echo "=== Page Source ==="
+run_test "GET page source" "GET" "/session/$SESSION_ID/source" "" '"<html'
+
+echo ""
+echo "=== Frames ==="
+run_test "Switch to frame (index 0)" "POST" "/session/$SESSION_ID/frame" '{"id":0}' 'null'
+run_test "GET title (in frame context)" "GET" "/session/$SESSION_ID/title" "" '"WebDriver Test App"'
+# Find element inside the frame
+run_test "Find element in frame (#frame-title)" "POST" "/session/$SESSION_ID/element" '{"using":"css selector","value":"#frame-title"}' '"element-6066'
+extract_element_id FRAME_TITLE_EID
+echo "      Frame Title Element ID: $FRAME_TITLE_EID"
+if [ -n "$FRAME_TITLE_EID" ]; then
+  run_test "Get text in frame" "GET" "/session/$SESSION_ID/element/$FRAME_TITLE_EID/text" "" '"Inside Frame"'
+fi
+run_test "Switch to parent frame" "POST" "/session/$SESSION_ID/frame/parent" "" 'null'
+# Verify we're back at top level
+run_test "Find #title after parent switch" "POST" "/session/$SESSION_ID/element" '{"using":"css selector","value":"#title"}' '"element-6066'
+run_test "Switch to frame again" "POST" "/session/$SESSION_ID/frame" '{"id":0}' 'null'
+run_test "Switch to top (null)" "POST" "/session/$SESSION_ID/frame" '{"id":null}' 'null'
+# Verify top-level again
+run_test "Find #title after top switch" "POST" "/session/$SESSION_ID/element" '{"using":"css selector","value":"#title"}' '"element-6066'
 
 echo ""
 echo "=== Find Elements ==="
@@ -141,9 +184,24 @@ run_test "Find element (#text-input)" "POST" "/session/$SESSION_ID/element" '{"u
 extract_element_id INPUT_EID
 echo "      Element ID: $INPUT_EID"
 
+run_test "Find element (#shadow-host)" "POST" "/session/$SESSION_ID/element" '{"using":"css selector","value":"#shadow-host"}' '"element-6066'
+extract_element_id SHADOW_HOST_EID
+echo "      Element ID: $SHADOW_HOST_EID"
+
+run_test "Find element (#dropdown)" "POST" "/session/$SESSION_ID/element" '{"using":"css selector","value":"#dropdown"}' '"element-6066'
+extract_element_id DROPDOWN_EID
+echo "      Element ID: $DROPDOWN_EID"
+
 run_test "Find elements (option)" "POST" "/session/$SESSION_ID/elements" '{"using":"css selector","value":"option"}' '"element-6066'
 
 run_test "Find element not found" "POST" "/session/$SESSION_ID/element" '{"using":"css selector","value":"#nonexistent"}' '"no such element"'
+
+echo ""
+echo "=== Find Element From Element ==="
+if [ -n "$DROPDOWN_EID" ]; then
+  run_test "Find child elements from dropdown" "POST" "/session/$SESSION_ID/element/$DROPDOWN_EID/elements" '{"using":"css selector","value":"option"}' '"element-6066'
+  run_test "Find single child from dropdown" "POST" "/session/$SESSION_ID/element/$DROPDOWN_EID/element" '{"using":"css selector","value":"option"}' '"element-6066'
+fi
 
 echo ""
 echo "=== Element Properties ==="
@@ -186,6 +244,39 @@ if [ -n "$INPUT_EID" ]; then
   run_test "Send keys to input" "POST" "/session/$SESSION_ID/element/$INPUT_EID/value" '{"text":"hello"}' 'null'
   sleep 0.2
   run_test "Clear input" "POST" "/session/$SESSION_ID/element/$INPUT_EID/clear" "" 'null'
+fi
+
+echo ""
+echo "=== Shadow DOM ==="
+if [ -n "$SHADOW_HOST_EID" ]; then
+  run_test "Get shadow root" "GET" "/session/$SESSION_ID/element/$SHADOW_HOST_EID/shadow" "" '"shadow-6066'
+  extract_shadow_id SHADOW_ROOT_ID
+  echo "      Shadow Root ID: $SHADOW_ROOT_ID"
+  if [ -n "$SHADOW_ROOT_ID" ]; then
+    run_test "Find element in shadow" "POST" "/session/$SESSION_ID/shadow/$SHADOW_ROOT_ID/element" '{"using":"css selector","value":".shadow-text"}' '"element-6066'
+    extract_element_id SHADOW_TEXT_EID
+    echo "      Shadow Text Element ID: $SHADOW_TEXT_EID"
+    if [ -n "$SHADOW_TEXT_EID" ]; then
+      run_test "Get shadow text" "GET" "/session/$SESSION_ID/element/$SHADOW_TEXT_EID/text" "" '"Shadow Content"'
+    fi
+    run_test "Find all elements in shadow" "POST" "/session/$SESSION_ID/shadow/$SHADOW_ROOT_ID/elements" '{"using":"css selector","value":"*"}' '"element-6066'
+  fi
+fi
+
+echo ""
+echo "=== Computed ARIA Role + Label ==="
+if [ -n "$BTN_EID" ] && [ -n "$TITLE_EID" ] && [ -n "$INPUT_EID" ]; then
+  run_test "Computed role of button" "GET" "/session/$SESSION_ID/element/$BTN_EID/computedrole" "" '"button"'
+  run_test "Computed role of h1" "GET" "/session/$SESSION_ID/element/$TITLE_EID/computedrole" "" '"heading"'
+  run_test "Computed label of text-input" "GET" "/session/$SESSION_ID/element/$INPUT_EID/computedlabel" "" '"Enter text"'
+fi
+
+echo ""
+echo "=== Active Element ==="
+if [ -n "$INPUT_EID" ]; then
+  run_test "Click input to focus" "POST" "/session/$SESSION_ID/element/$INPUT_EID/click" "" 'null'
+  sleep 0.3
+  run_test "GET active element" "GET" "/session/$SESSION_ID/element/active" "" '"element-6066'
 fi
 
 echo ""

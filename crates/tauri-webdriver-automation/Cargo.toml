@@ -1,14 +1,19 @@
 [package]
-name = "tauri-webdriver"
+name = "tauri-webdriver-automation"
 version = "0.1.0"
 description = "Open-source macOS WebDriver server for Tauri apps"
+authors = ["Generous Corp"]
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+keywords = ["tauri", "webdriver", "testing", "selenium", "wdio"]
+categories = ["development-tools::testing", "command-line-utilities"]
+homepage = "https://github.com/danielraffel/tauri-webdriver"
+readme = "../../README.md"
 
 [[bin]]
-name = "tauri-webdriver"
+name = "tauri-wd"
 path = "src/main.rs"
 
 [dependencies]

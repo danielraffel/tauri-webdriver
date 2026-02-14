@@ -1,4 +1,4 @@
-// tauri-webdriver: W3C WebDriver server for Tauri apps on macOS.
+// tauri-webdriver-automation: W3C WebDriver server for Tauri apps on macOS.
 //
 // Launches the Tauri app, discovers the plugin's HTTP port from stdout,
 // and translates W3C WebDriver commands into plugin API calls.
@@ -18,11 +18,12 @@ use tokio::io::AsyncBufReadExt;
 use tokio::sync::Mutex;
 
 const W3C_ELEMENT_KEY: &str = "element-6066-11e4-a52e-4f735466cecf";
+const W3C_SHADOW_KEY: &str = "shadow-6066-11e4-a52e-4f735466cecf";
 
 // --- CLI arguments ---
 
 #[derive(Parser)]
-#[command(name = "tauri-webdriver", about = "W3C WebDriver server for Tauri apps")]
+#[command(name = "tauri-wd", about = "W3C WebDriver server for Tauri apps")]
 struct Cli {
     /// WebDriver server port
     #[arg(long, default_value = "4444")]
@@ -43,6 +44,12 @@ struct ElementRef {
     selector: String,
     index: usize,
     using: String,
+}
+
+struct ShadowRef {
+    host_selector: String,
+    host_index: usize,
+    host_using: String,
 }
 
 struct Timeouts {
@@ -66,6 +73,7 @@ struct Session {
     plugin_url: String,
     process: tokio::process::Child,
     elements: HashMap<String, ElementRef>,
+    shadows: HashMap<String, ShadowRef>,
     client: reqwest::Client,
     timeouts: Timeouts,
 }
@@ -354,6 +362,7 @@ async fn create_session(
         plugin_url,
         process: child,
         elements: HashMap::new(),
+        shadows: HashMap::new(),
         client: reqwest::Client::new(),
         timeouts: Timeouts::default(),
     });
@@ -1071,6 +1080,403 @@ async fn element_screenshot(
     ))
 }
 
+// --- Shadow DOM handlers ---
+
+async fn get_shadow_root(
+    AxumState(state): AxumState<SharedState>,
+    Path((sid, eid)): Path<(String, String)>,
+) -> W3cResult {
+    let mut guard = state.session.lock().await;
+    let session = check_session_mut(&mut guard, &sid)?;
+    let elem = session
+        .elements
+        .get(&eid)
+        .ok_or_else(|| W3cError::no_element(&eid))?;
+    let host_selector = elem.selector.clone();
+    let host_index = elem.index;
+    let host_using = elem.using.clone();
+    let result = plugin_post(
+        session,
+        "/element/shadow",
+        json!({"selector": host_selector, "index": host_index, "using": host_using}),
+    )
+    .await?;
+    let has_shadow = result
+        .get("hasShadow")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !has_shadow {
+        return Err(W3cError::new(
+            StatusCode::NOT_FOUND,
+            "no such shadow root",
+            format!("Element {eid} does not have a shadow root"),
+        ));
+    }
+    let shadow_id = uuid::Uuid::new_v4().to_string();
+    session.shadows.insert(
+        shadow_id.clone(),
+        ShadowRef {
+            host_selector,
+            host_index,
+            host_using,
+        },
+    );
+    Ok(w3c_value(json!({W3C_SHADOW_KEY: shadow_id})))
+}
+
+async fn find_in_shadow(
+    AxumState(state): AxumState<SharedState>,
+    Path((sid, shadow_id)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> W3cResult {
+    let mut guard = state.session.lock().await;
+    let session = check_session_mut(&mut guard, &sid)?;
+    let shadow = session
+        .shadows
+        .get(&shadow_id)
+        .ok_or_else(|| {
+            W3cError::new(
+                StatusCode::NOT_FOUND,
+                "no such shadow root",
+                format!("Shadow root {shadow_id} not found"),
+            )
+        })?;
+    let host_selector = shadow.host_selector.clone();
+    let host_index = shadow.host_index;
+    let host_using = shadow.host_using.clone();
+    let (using, value) = extract_locator(&body)?;
+    let result = plugin_post(
+        session,
+        "/shadow/find",
+        json!({
+            "host_selector": host_selector,
+            "host_index": host_index,
+            "host_using": host_using,
+            "using": using,
+            "value": value
+        }),
+    )
+    .await?;
+
+    let elements = result
+        .get("elements")
+        .and_then(|e| e.as_array())
+        .ok_or_else(|| {
+            W3cError::new(
+                StatusCode::NOT_FOUND,
+                "no such element",
+                format!("No element found in shadow with {using}: {value}"),
+            )
+        })?;
+
+    if elements.is_empty() {
+        return Err(W3cError::new(
+            StatusCode::NOT_FOUND,
+            "no such element",
+            format!("No element found in shadow with {using}: {value}"),
+        ));
+    }
+
+    let child_eid = store_element(session, &elements[0]);
+    Ok(w3c_value(json!({W3C_ELEMENT_KEY: child_eid})))
+}
+
+async fn find_all_in_shadow(
+    AxumState(state): AxumState<SharedState>,
+    Path((sid, shadow_id)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> W3cResult {
+    let mut guard = state.session.lock().await;
+    let session = check_session_mut(&mut guard, &sid)?;
+    let shadow = session
+        .shadows
+        .get(&shadow_id)
+        .ok_or_else(|| {
+            W3cError::new(
+                StatusCode::NOT_FOUND,
+                "no such shadow root",
+                format!("Shadow root {shadow_id} not found"),
+            )
+        })?;
+    let host_selector = shadow.host_selector.clone();
+    let host_index = shadow.host_index;
+    let host_using = shadow.host_using.clone();
+    let (using, value) = extract_locator(&body)?;
+    let result = plugin_post(
+        session,
+        "/shadow/find",
+        json!({
+            "host_selector": host_selector,
+            "host_index": host_index,
+            "host_using": host_using,
+            "using": using,
+            "value": value
+        }),
+    )
+    .await?;
+
+    let empty = vec![];
+    let elements = result
+        .get("elements")
+        .and_then(|e| e.as_array())
+        .unwrap_or(&empty);
+
+    let mapped: Vec<Value> = elements
+        .iter()
+        .map(|elem| {
+            let child_eid = store_element(session, elem);
+            json!({W3C_ELEMENT_KEY: child_eid})
+        })
+        .collect();
+
+    Ok(w3c_value(json!(mapped)))
+}
+
+// --- Frame handlers ---
+
+async fn switch_to_frame(
+    AxumState(state): AxumState<SharedState>,
+    Path(sid): Path<String>,
+    Json(body): Json<Value>,
+) -> W3cResult {
+    let guard = state.session.lock().await;
+    let session = check_session(&guard, &sid)?;
+
+    let frame_id = body.get("id").cloned().unwrap_or(Value::Null);
+
+    if frame_id.is_null() {
+        // Switch to top-level
+        plugin_post(session, "/frame/switch", json!({"id": null})).await?;
+        return Ok(w3c_value(json!(null)));
+    }
+
+    if let Some(idx) = frame_id.as_u64() {
+        // Switch by index
+        plugin_post(session, "/frame/switch", json!({"id": idx})).await?;
+        return Ok(w3c_value(json!(null)));
+    }
+
+    // Switch by element reference
+    if let Some(eid) = frame_id.get(W3C_ELEMENT_KEY).and_then(|v| v.as_str()) {
+        let elem = resolve_element(session, eid)?;
+        plugin_post(
+            session,
+            "/frame/switch",
+            json!({"id": {"selector": elem.selector, "index": elem.index}}),
+        )
+        .await?;
+        return Ok(w3c_value(json!(null)));
+    }
+
+    Err(W3cError::bad_request("Invalid frame id"))
+}
+
+async fn switch_to_parent_frame(
+    AxumState(state): AxumState<SharedState>,
+    Path(sid): Path<String>,
+) -> W3cResult {
+    let guard = state.session.lock().await;
+    let session = check_session(&guard, &sid)?;
+    plugin_post(session, "/frame/parent", json!({})).await?;
+    Ok(w3c_value(json!(null)))
+}
+
+// --- Switch To Window handler ---
+
+async fn switch_to_window(
+    AxumState(state): AxumState<SharedState>,
+    Path(sid): Path<String>,
+    Json(body): Json<Value>,
+) -> W3cResult {
+    let guard = state.session.lock().await;
+    let session = check_session(&guard, &sid)?;
+    let handle = body
+        .get("handle")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| W3cError::bad_request("Missing 'handle'"))?;
+    plugin_post(session, "/window/set-current", json!({"label": handle}))
+        .await
+        .map_err(|_| {
+            W3cError::new(
+                StatusCode::NOT_FOUND,
+                "no such window",
+                format!("Window '{handle}' not found"),
+            )
+        })?;
+    Ok(w3c_value(json!(null)))
+}
+
+// --- Find element from element (scoped search) handlers ---
+
+async fn find_element_from_element(
+    AxumState(state): AxumState<SharedState>,
+    Path((sid, eid)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> W3cResult {
+    let mut guard = state.session.lock().await;
+    let session = check_session_mut(&mut guard, &sid)?;
+    let parent = session
+        .elements
+        .get(&eid)
+        .ok_or_else(|| W3cError::no_element(&eid))?;
+    let parent_selector = parent.selector.clone();
+    let parent_index = parent.index;
+    let parent_using = parent.using.clone();
+    let (using, value) = extract_locator(&body)?;
+    let result = plugin_post(
+        session,
+        "/element/find-from",
+        json!({
+            "parent_selector": parent_selector,
+            "parent_index": parent_index,
+            "parent_using": parent_using,
+            "using": using,
+            "value": value
+        }),
+    )
+    .await?;
+
+    let elements = result
+        .get("elements")
+        .and_then(|e| e.as_array())
+        .ok_or_else(|| {
+            W3cError::new(
+                StatusCode::NOT_FOUND,
+                "no such element",
+                format!("No child element found with {using}: {value}"),
+            )
+        })?;
+
+    if elements.is_empty() {
+        return Err(W3cError::new(
+            StatusCode::NOT_FOUND,
+            "no such element",
+            format!("No child element found with {using}: {value}"),
+        ));
+    }
+
+    let child_eid = store_element(session, &elements[0]);
+    Ok(w3c_value(json!({W3C_ELEMENT_KEY: child_eid})))
+}
+
+async fn find_elements_from_element(
+    AxumState(state): AxumState<SharedState>,
+    Path((sid, eid)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> W3cResult {
+    let mut guard = state.session.lock().await;
+    let session = check_session_mut(&mut guard, &sid)?;
+    let parent = session
+        .elements
+        .get(&eid)
+        .ok_or_else(|| W3cError::no_element(&eid))?;
+    let parent_selector = parent.selector.clone();
+    let parent_index = parent.index;
+    let parent_using = parent.using.clone();
+    let (using, value) = extract_locator(&body)?;
+    let result = plugin_post(
+        session,
+        "/element/find-from",
+        json!({
+            "parent_selector": parent_selector,
+            "parent_index": parent_index,
+            "parent_using": parent_using,
+            "using": using,
+            "value": value
+        }),
+    )
+    .await?;
+
+    let empty = vec![];
+    let elements = result
+        .get("elements")
+        .and_then(|e| e.as_array())
+        .unwrap_or(&empty);
+
+    let mapped: Vec<Value> = elements
+        .iter()
+        .map(|elem| {
+            let child_eid = store_element(session, elem);
+            json!({W3C_ELEMENT_KEY: child_eid})
+        })
+        .collect();
+
+    Ok(w3c_value(json!(mapped)))
+}
+
+// --- Computed ARIA role + label handlers ---
+
+async fn get_computed_role(
+    AxumState(state): AxumState<SharedState>,
+    Path((sid, eid)): Path<(String, String)>,
+) -> W3cResult {
+    let guard = state.session.lock().await;
+    let session = check_session(&guard, &sid)?;
+    let elem = resolve_element(session, &eid)?;
+    let result = plugin_post(
+        session,
+        "/element/computed-role",
+        json!({"selector": elem.selector, "index": elem.index, "using": elem.using}),
+    )
+    .await?;
+    Ok(w3c_value(
+        result.get("role").cloned().unwrap_or(json!("generic")),
+    ))
+}
+
+async fn get_computed_label(
+    AxumState(state): AxumState<SharedState>,
+    Path((sid, eid)): Path<(String, String)>,
+) -> W3cResult {
+    let guard = state.session.lock().await;
+    let session = check_session(&guard, &sid)?;
+    let elem = resolve_element(session, &eid)?;
+    let result = plugin_post(
+        session,
+        "/element/computed-label",
+        json!({"selector": elem.selector, "index": elem.index, "using": elem.using}),
+    )
+    .await?;
+    Ok(w3c_value(
+        result.get("label").cloned().unwrap_or(json!("")),
+    ))
+}
+
+// --- Active element handler ---
+
+async fn get_active_element(
+    AxumState(state): AxumState<SharedState>,
+    Path(sid): Path<String>,
+) -> W3cResult {
+    let mut guard = state.session.lock().await;
+    let session = check_session_mut(&mut guard, &sid)?;
+    let result = plugin_post(session, "/element/active", json!({})).await?;
+    let elem = result.get("element").cloned().unwrap_or(Value::Null);
+    if elem.is_null() {
+        return Err(W3cError::new(
+            StatusCode::NOT_FOUND,
+            "no such element",
+            "No element is focused",
+        ));
+    }
+    let eid = store_element(session, &elem);
+    Ok(w3c_value(json!({W3C_ELEMENT_KEY: eid})))
+}
+
+// --- Page source handler ---
+
+async fn get_page_source(
+    AxumState(state): AxumState<SharedState>,
+    Path(sid): Path<String>,
+) -> W3cResult {
+    let guard = state.session.lock().await;
+    let session = check_session(&guard, &sid)?;
+    let result = plugin_post(session, "/source", json!({})).await?;
+    Ok(w3c_value(
+        result.get("source").cloned().unwrap_or(json!("")),
+    ))
+}
+
 // --- Main ---
 
 #[tokio::main]
@@ -1100,11 +1506,13 @@ async fn main() {
         .route("/session/{sid}/url", post(navigate_to))
         .route("/session/{sid}/url", get(get_url))
         .route("/session/{sid}/title", get(get_title))
+        .route("/session/{sid}/source", get(get_page_source))
         .route("/session/{sid}/back", post(go_back))
         .route("/session/{sid}/forward", post(go_forward))
         .route("/session/{sid}/refresh", post(refresh))
         // Window
         .route("/session/{sid}/window", get(get_window_handle))
+        .route("/session/{sid}/window", post(switch_to_window))
         .route("/session/{sid}/window", delete(close_window))
         .route("/session/{sid}/window/handles", get(get_window_handles))
         .route("/session/{sid}/window/rect", get(get_window_rect))
@@ -1112,9 +1520,24 @@ async fn main() {
         .route("/session/{sid}/window/maximize", post(maximize_window))
         .route("/session/{sid}/window/minimize", post(minimize_window))
         .route("/session/{sid}/window/fullscreen", post(fullscreen_window))
+        // Frames
+        .route("/session/{sid}/frame", post(switch_to_frame))
+        .route(
+            "/session/{sid}/frame/parent",
+            post(switch_to_parent_frame),
+        )
         // Elements
         .route("/session/{sid}/element", post(find_element))
         .route("/session/{sid}/elements", post(find_elements))
+        .route("/session/{sid}/element/active", get(get_active_element))
+        .route(
+            "/session/{sid}/element/{eid}/element",
+            post(find_element_from_element),
+        )
+        .route(
+            "/session/{sid}/element/{eid}/elements",
+            post(find_elements_from_element),
+        )
         .route("/session/{sid}/element/{eid}/click", post(click_element))
         .route("/session/{sid}/element/{eid}/clear", post(clear_element))
         .route("/session/{sid}/element/{eid}/value", post(send_keys))
@@ -1148,6 +1571,26 @@ async fn main() {
             "/session/{sid}/element/{eid}/displayed",
             get(is_element_displayed),
         )
+        .route(
+            "/session/{sid}/element/{eid}/computedrole",
+            get(get_computed_role),
+        )
+        .route(
+            "/session/{sid}/element/{eid}/computedlabel",
+            get(get_computed_label),
+        )
+        .route(
+            "/session/{sid}/element/{eid}/shadow",
+            get(get_shadow_root),
+        )
+        .route(
+            "/session/{sid}/shadow/{sid2}/element",
+            post(find_in_shadow),
+        )
+        .route(
+            "/session/{sid}/shadow/{sid2}/elements",
+            post(find_all_in_shadow),
+        )
         // Scripts
         .route("/session/{sid}/execute/sync", post(execute_sync))
         .route("/session/{sid}/execute/async", post(execute_async))
@@ -1174,7 +1617,7 @@ async fn main() {
     let shutdown_state = state;
 
     let addr = format!("{}:{}", cli.host, cli.port);
-    tracing::info!("tauri-webdriver listening on {}", addr);
+    tracing::info!("tauri-wd listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr)
         .await

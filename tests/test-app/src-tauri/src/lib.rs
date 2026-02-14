@@ -3,7 +3,7 @@ pub fn run() {
 
     #[cfg(debug_assertions)]
     {
-        builder = builder.plugin(tauri_plugin_webdriver::init());
+        builder = builder.plugin(tauri_plugin_webdriver_automation::init());
     }
 
     builder

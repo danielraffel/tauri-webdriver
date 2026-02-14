@@ -3337,7 +3337,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tauri-plugin-webdriver"
+name = "tauri-plugin-webdriver-automation"
 version = "0.1.0"
 dependencies = [
  "axum",
@@ -4062,7 +4062,7 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
- "tauri-plugin-webdriver",
+ "tauri-plugin-webdriver-automation",
 ]
 
 [[package]]

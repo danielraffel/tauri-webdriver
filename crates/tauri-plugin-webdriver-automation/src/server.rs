@@ -1,4 +1,4 @@
-// HTTP server for the tauri-plugin-webdriver plugin.
+// HTTP server for the tauri-plugin-webdriver-automation plugin.
 // Binds to 127.0.0.1 on a random port and exposes endpoints for
 // window management, element interaction, script execution, and navigation.
 
@@ -18,11 +18,46 @@ use crate::{window_by_label, WebDriverState};
 
 // --- Server state ---
 
+struct FrameRef {
+    selector: String,
+    index: usize,
+}
+
 struct ServerState<R: Runtime> {
     app: tauri::AppHandle<R>,
+    current_window_label: std::sync::Mutex<Option<String>>,
+    frame_stack: std::sync::Mutex<Vec<FrameRef>>,
 }
 
 type SharedState<R> = Arc<ServerState<R>>;
+
+/// Build a JS snippet that navigates into the current iframe stack.
+/// Returns the JS code that sets `__doc` to the correct frame document,
+/// or an empty string if we're at the top level.
+fn build_frame_prefix<R: Runtime>(state: &SharedState<R>) -> String {
+    let stack = state.frame_stack.lock().expect("lock poisoned");
+    if stack.is_empty() {
+        return String::new();
+    }
+    let mut js = "var __doc=document;".to_string();
+    for fr in stack.iter() {
+        let sel_json = serde_json::to_string(&fr.selector).unwrap();
+        js.push_str(&format!(
+            "var __f=__doc.querySelectorAll({sel_json})[{idx}];\
+             if(!__f)throw new Error('frame not found');\
+             __doc=__f.contentDocument;\
+             if(!__doc)throw new Error('cannot access frame document');",
+            sel_json = sel_json,
+            idx = fr.index,
+        ));
+    }
+    js
+}
+
+/// Returns true if the frame stack is non-empty.
+fn in_frame<R: Runtime>(state: &SharedState<R>) -> bool {
+    !state.frame_stack.lock().expect("lock poisoned").is_empty()
+}
 
 // --- Error handling ---
 
@@ -46,37 +81,63 @@ type ApiResult = Result<Json<Value>, ApiError>;
 // --- JS evaluation helpers ---
 
 async fn eval_js<R: Runtime>(
-    app: &tauri::AppHandle<R>,
-    label: Option<&str>,
+    state: &SharedState<R>,
     script: &str,
 ) -> Result<Value, ApiError> {
-    let window =
-        window_by_label(app, label).ok_or_else(|| ApiError::NotFound("no such window".into()))?;
+    let label = state
+        .current_window_label
+        .lock()
+        .expect("lock poisoned")
+        .clone();
+    let window = window_by_label(&state.app, label.as_deref())
+        .ok_or_else(|| ApiError::NotFound("no such window".into()))?;
 
     let id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = tokio::sync::oneshot::channel();
 
     {
-        let state = app.state::<WebDriverState>();
-        state
-            .pending_scripts
+        let ws = state.app.state::<WebDriverState>();
+        ws.pending_scripts
             .lock()
             .expect("lock poisoned")
             .insert(id.clone(), tx);
     }
 
+    // Build frame prefix to navigate into current iframe context.
+    let frame_prefix = build_frame_prefix(state);
+    let is_framed = in_frame(state);
+
     // Wrap user script: execute it, send result back via IPC.
-    let wrapped = format!(
-        concat!(
-            "(function(){{try{{var __r=(function(){{{script}}})();",
-            "window.__WEBDRIVER__.resolve(\"{id}\",__r)",
-            "}}catch(__e){{window.__WEBDRIVER__.resolve(\"{id}\",",
-            "{{error:__e.name,message:__e.message,stacktrace:__e.stack||\"\"}})",
-            "}}}})()"
-        ),
-        script = script,
-        id = id,
-    );
+    // When inside a frame, pass the frame document as a `document` parameter
+    // to the inner function, which shadows the global `document` without
+    // hoisting issues that `var document=...` would cause.
+    let wrapped = if is_framed {
+        format!(
+            concat!(
+                "(function(){{try{{{frame_prefix}",
+                "var __r=(function(document){{{script}}}).call(null,__doc);",
+                "window.__WEBDRIVER__.resolve(\"{id}\",__r)",
+                "}}catch(__e){{window.__WEBDRIVER__.resolve(\"{id}\",",
+                "{{error:__e.name,message:__e.message,stacktrace:__e.stack||\"\"}})",
+                "}}}})()"
+            ),
+            frame_prefix = frame_prefix,
+            script = script,
+            id = id,
+        )
+    } else {
+        format!(
+            concat!(
+                "(function(){{try{{var __r=(function(){{{script}}})();",
+                "window.__WEBDRIVER__.resolve(\"{id}\",__r)",
+                "}}catch(__e){{window.__WEBDRIVER__.resolve(\"{id}\",",
+                "{{error:__e.name,message:__e.message,stacktrace:__e.stack||\"\"}})",
+                "}}}})()"
+            ),
+            script = script,
+            id = id,
+        )
+    };
 
     window
         .eval(&wrapped)
@@ -98,8 +159,11 @@ async fn eval_js<R: Runtime>(
         }
         Ok(Err(_)) => Err(ApiError::Internal("result channel closed".into())),
         Err(_) => {
-            let state = app.state::<WebDriverState>();
-            state.pending_scripts.lock().expect("lock poisoned").remove(&id);
+            let ws = state.app.state::<WebDriverState>();
+            ws.pending_scripts
+                .lock()
+                .expect("lock poisoned")
+                .remove(&id);
             Err(ApiError::Internal("script timed out".into()))
         }
     }
@@ -107,24 +171,42 @@ async fn eval_js<R: Runtime>(
 
 /// Evaluate JS that operates on a located element.
 async fn eval_on_element<R: Runtime>(
-    app: &tauri::AppHandle<R>,
+    state: &SharedState<R>,
     selector: &str,
     index: usize,
     using: Option<&str>,
     body: &str,
 ) -> Result<Value, ApiError> {
-    let find_fn = if using == Some("xpath") {
-        "findElementByXPath"
+    let script = if using == Some("shadow") {
+        // Shadow DOM element: look up from the shadow cache by ID
+        let sel_json = serde_json::to_string(selector).unwrap();
+        format!(
+            "var el=window.__WEBDRIVER__.findElementInShadow({sel_json});\
+             if(!el)throw new Error(\"shadow element not found or stale\");\
+             {body}"
+        )
     } else {
-        "findElement"
+        let sel_json = serde_json::to_string(selector).unwrap();
+        // When inside a frame context, eval_js passes the frame document as
+        // the `document` parameter, so we use document.querySelectorAll directly
+        // instead of the findElement helper (which uses the top-level document).
+        if using == Some("xpath") {
+            format!(
+                "var __xr=document.evaluate({sel_json},document,null,\
+                 XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);\
+                 var el=__xr.snapshotItem({index});\
+                 if(!el)throw new Error(\"element not found\");\
+                 {body}"
+            )
+        } else {
+            format!(
+                "var el=document.querySelectorAll({sel_json})[{index}];\
+                 if(!el)throw new Error(\"element not found\");\
+                 {body}"
+            )
+        }
     };
-    let sel_json = serde_json::to_string(selector).unwrap();
-    let script = format!(
-        "var el=window.__WEBDRIVER__.{find_fn}({sel_json},{index});\
-         if(!el)throw new Error(\"element not found\");\
-         {body}"
-    );
-    eval_js(app, None, &script).await
+    eval_js(state, &script).await
 }
 
 // --- Request body types ---
@@ -228,8 +310,13 @@ async fn window_handle<R: Runtime>(
     AxumState(state): AxumState<SharedState<R>>,
     Json(_body): Json<Value>,
 ) -> ApiResult {
-    let window =
-        window_by_label(&state.app, None).ok_or(ApiError::NotFound("no window".into()))?;
+    let label = state
+        .current_window_label
+        .lock()
+        .expect("lock poisoned")
+        .clone();
+    let window = window_by_label(&state.app, label.as_deref())
+        .ok_or(ApiError::NotFound("no window".into()))?;
     Ok(Json(json!(window.label())))
 }
 
@@ -389,7 +476,7 @@ async fn element_find<R: Runtime>(
         )
     };
 
-    let result = eval_js(&state.app, None, &script).await?;
+    let result = eval_js(&state, &script).await?;
     Ok(Json(json!({"elements": result})))
 }
 
@@ -398,7 +485,7 @@ async fn element_text<R: Runtime>(
     Json(body): Json<ElemReq>,
 ) -> ApiResult {
     let result = eval_on_element(
-        &state.app,
+        &state,
         &body.selector,
         body.index,
         body.using.as_deref(),
@@ -415,7 +502,7 @@ async fn element_attribute<R: Runtime>(
     let name_json = serde_json::to_string(&body.name).unwrap();
     let js = format!("return el.getAttribute({name_json})");
     let result = eval_on_element(
-        &state.app,
+        &state,
         &body.selector,
         body.index,
         body.using.as_deref(),
@@ -432,7 +519,7 @@ async fn element_property<R: Runtime>(
     let name_json = serde_json::to_string(&body.name).unwrap();
     let js = format!("return el[{name_json}]");
     let result = eval_on_element(
-        &state.app,
+        &state,
         &body.selector,
         body.index,
         body.using.as_deref(),
@@ -447,7 +534,7 @@ async fn element_tag<R: Runtime>(
     Json(body): Json<ElemReq>,
 ) -> ApiResult {
     let result = eval_on_element(
-        &state.app,
+        &state,
         &body.selector,
         body.index,
         body.using.as_deref(),
@@ -462,7 +549,7 @@ async fn element_rect<R: Runtime>(
     Json(body): Json<ElemReq>,
 ) -> ApiResult {
     let result = eval_on_element(
-        &state.app,
+        &state,
         &body.selector,
         body.index,
         body.using.as_deref(),
@@ -477,11 +564,11 @@ async fn element_click<R: Runtime>(
     Json(body): Json<ElemReq>,
 ) -> ApiResult {
     eval_on_element(
-        &state.app,
+        &state,
         &body.selector,
         body.index,
         body.using.as_deref(),
-        "el.scrollIntoView({block:'center',inline:'center'});el.click();return null",
+        "el.scrollIntoView({block:'center',inline:'center'});el.focus();el.click();return null",
     )
     .await?;
     Ok(Json(json!(null)))
@@ -492,7 +579,7 @@ async fn element_clear<R: Runtime>(
     Json(body): Json<ElemReq>,
 ) -> ApiResult {
     eval_on_element(
-        &state.app,
+        &state,
         &body.selector,
         body.index,
         body.using.as_deref(),
@@ -514,7 +601,7 @@ async fn element_send_keys<R: Runtime>(
          el.dispatchEvent(new Event('change',{{bubbles:true}}));return null"
     );
     eval_on_element(
-        &state.app,
+        &state,
         &body.selector,
         body.index,
         body.using.as_deref(),
@@ -529,7 +616,7 @@ async fn element_displayed<R: Runtime>(
     Json(body): Json<ElemReq>,
 ) -> ApiResult {
     let result = eval_on_element(
-        &state.app,
+        &state,
         &body.selector,
         body.index,
         body.using.as_deref(),
@@ -545,7 +632,7 @@ async fn element_enabled<R: Runtime>(
     Json(body): Json<ElemReq>,
 ) -> ApiResult {
     let result = eval_on_element(
-        &state.app,
+        &state,
         &body.selector,
         body.index,
         body.using.as_deref(),
@@ -560,7 +647,7 @@ async fn element_selected<R: Runtime>(
     Json(body): Json<ElemReq>,
 ) -> ApiResult {
     let result = eval_on_element(
-        &state.app,
+        &state,
         &body.selector,
         body.index,
         body.using.as_deref(),
@@ -581,7 +668,7 @@ async fn script_execute<R: Runtime>(
         "var __args={args_json};return (function(){{{}}}).apply(null,__args)",
         body.script
     );
-    let result = eval_js(&state.app, None, &script).await?;
+    let result = eval_js(&state, &script).await?;
     Ok(Json(json!({"value": result})))
 }
 
@@ -589,8 +676,13 @@ async fn script_execute_async<R: Runtime>(
     AxumState(state): AxumState<SharedState<R>>,
     Json(body): Json<ScriptReq>,
 ) -> ApiResult {
-    let window =
-        window_by_label(&state.app, None).ok_or(ApiError::NotFound("no window".into()))?;
+    let label = state
+        .current_window_label
+        .lock()
+        .expect("lock poisoned")
+        .clone();
+    let window = window_by_label(&state.app, label.as_deref())
+        .ok_or(ApiError::NotFound("no window".into()))?;
 
     let id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -652,8 +744,7 @@ async fn navigate_url<R: Runtime>(
 ) -> ApiResult {
     let url_json = serde_json::to_string(&body.url).unwrap();
     eval_js(
-        &state.app,
-        None,
+        &state,
         &format!("window.location.href={url_json};return null"),
     )
     .await?;
@@ -664,7 +755,8 @@ async fn navigate_current<R: Runtime>(
     AxumState(state): AxumState<SharedState<R>>,
     Json(_body): Json<Value>,
 ) -> ApiResult {
-    let result = eval_js(&state.app, None, "return window.location.href").await?;
+    // Always return the top-level URL, even when inside a frame context.
+    let result = eval_js(&state, "return window.location.href").await?;
     Ok(Json(json!({"url": result})))
 }
 
@@ -672,7 +764,9 @@ async fn navigate_title<R: Runtime>(
     AxumState(state): AxumState<SharedState<R>>,
     Json(_body): Json<Value>,
 ) -> ApiResult {
-    let result = eval_js(&state.app, None, "return document.title").await?;
+    // Always return the top-level document title, even when inside a frame.
+    // Use window.document (not shadowed by frame prefix) to access the real document.
+    let result = eval_js(&state, "return window.document.title").await?;
     Ok(Json(json!({"title": result})))
 }
 
@@ -680,7 +774,7 @@ async fn navigate_back<R: Runtime>(
     AxumState(state): AxumState<SharedState<R>>,
     Json(_body): Json<Value>,
 ) -> ApiResult {
-    eval_js(&state.app, None, "window.history.back();return null").await?;
+    eval_js(&state, "window.history.back();return null").await?;
     Ok(Json(json!(null)))
 }
 
@@ -688,7 +782,7 @@ async fn navigate_forward<R: Runtime>(
     AxumState(state): AxumState<SharedState<R>>,
     Json(_body): Json<Value>,
 ) -> ApiResult {
-    eval_js(&state.app, None, "window.history.forward();return null").await?;
+    eval_js(&state, "window.history.forward();return null").await?;
     Ok(Json(json!(null)))
 }
 
@@ -696,7 +790,7 @@ async fn navigate_refresh<R: Runtime>(
     AxumState(state): AxumState<SharedState<R>>,
     Json(_body): Json<Value>,
 ) -> ApiResult {
-    eval_js(&state.app, None, "window.location.reload();return null").await?;
+    eval_js(&state, "window.location.reload();return null").await?;
     Ok(Json(json!(null)))
 }
 
@@ -705,19 +799,23 @@ async fn navigate_refresh<R: Runtime>(
 /// Helper: run raw JS that manually calls __WEBDRIVER__.resolve(id, result).
 /// Unlike eval_js, the script is NOT wrapped — the caller must call resolve().
 async fn eval_js_callback<R: Runtime>(
-    app: &tauri::AppHandle<R>,
+    state: &SharedState<R>,
     script: &str,
 ) -> Result<Value, ApiError> {
-    let window =
-        window_by_label(app, None).ok_or_else(|| ApiError::NotFound("no such window".into()))?;
+    let label = state
+        .current_window_label
+        .lock()
+        .expect("lock poisoned")
+        .clone();
+    let window = window_by_label(&state.app, label.as_deref())
+        .ok_or_else(|| ApiError::NotFound("no such window".into()))?;
 
     let id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = tokio::sync::oneshot::channel();
 
     {
-        let state = app.state::<WebDriverState>();
-        state
-            .pending_scripts
+        let ws = state.app.state::<WebDriverState>();
+        ws.pending_scripts
             .lock()
             .expect("lock poisoned")
             .insert(id.clone(), tx);
@@ -744,9 +842,8 @@ async fn eval_js_callback<R: Runtime>(
         }
         Ok(Err(_)) => Err(ApiError::Internal("result channel closed".into())),
         Err(_) => {
-            let state = app.state::<WebDriverState>();
-            state
-                .pending_scripts
+            let ws = state.app.state::<WebDriverState>();
+            ws.pending_scripts
                 .lock()
                 .expect("lock poisoned")
                 .remove(&id);
@@ -779,7 +876,7 @@ img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg)
 }catch(e){window.__WEBDRIVER__.resolve("__CALLBACK_ID__",
 {error:e.name,message:e.message,stacktrace:e.stack||""})}})()"#;
 
-    let result = eval_js_callback(&state.app, script).await?;
+    let result = eval_js_callback(&state, script).await?;
     Ok(Json(json!({"data": result})))
 }
 
@@ -827,7 +924,7 @@ img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg)
         index = body.index,
     );
 
-    let result = eval_js_callback(&state.app, &script).await?;
+    let result = eval_js_callback(&state, &script).await?;
     Ok(Json(json!({"data": result})))
 }
 
@@ -846,7 +943,7 @@ for (var i = 0; i < keys.length; i++) {
 }
 return cookies;
 "#;
-    let result = eval_js(&state.app, None, script).await?;
+    let result = eval_js(&state, script).await?;
     Ok(Json(json!({"cookies": result})))
 }
 
@@ -859,7 +956,7 @@ async fn cookie_get<R: Runtime>(
         "var c=window.__WEBDRIVER__.cookies[{name_json}];\
          return c||null"
     );
-    let result = eval_js(&state.app, None, &script).await?;
+    let result = eval_js(&state, &script).await?;
     Ok(Json(json!({"cookie": result})))
 }
 
@@ -890,7 +987,7 @@ async fn cookie_add<R: Runtime>(
          }};return null"
     );
 
-    eval_js(&state.app, None, &script).await?;
+    eval_js(&state, &script).await?;
     Ok(Json(json!(null)))
 }
 
@@ -902,7 +999,7 @@ async fn cookie_delete<R: Runtime>(
     let script = format!(
         "delete window.__WEBDRIVER__.cookies[{name_json}];return null"
     );
-    eval_js(&state.app, None, &script).await?;
+    eval_js(&state, &script).await?;
     Ok(Json(json!(null)))
 }
 
@@ -913,7 +1010,7 @@ async fn cookie_delete_all<R: Runtime>(
     let script = "var s=window.__WEBDRIVER__.cookies;\
          var k=Object.keys(s);for(var i=0;i<k.length;i++)delete s[k[i]];\
          return null";
-    eval_js(&state.app, None, script).await?;
+    eval_js(&state, script).await?;
     Ok(Json(json!(null)))
 }
 
@@ -1098,7 +1195,7 @@ async fn actions_perform<R: Runtime>(
         if !js_parts.is_empty() {
             let combined = js_parts.join("");
             let script = format!("{combined}return null");
-            eval_js(&state.app, None, &script).await?;
+            eval_js(&state, &script).await?;
         }
 
         // Apply pause duration for this tick.
@@ -1119,13 +1216,312 @@ async fn actions_release<R: Runtime>(
     Ok(Json(json!(null)))
 }
 
+// --- Shadow DOM handlers ---
+
+async fn element_shadow<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(body): Json<ElemReq>,
+) -> ApiResult {
+    let result = eval_on_element(
+        &state,
+        &body.selector,
+        body.index,
+        body.using.as_deref(),
+        "return el.shadowRoot !== null",
+    )
+    .await?;
+    Ok(Json(json!({"hasShadow": result})))
+}
+
+#[derive(Deserialize)]
+struct ShadowFindReq {
+    host_selector: String,
+    host_index: usize,
+    #[serde(default)]
+    host_using: Option<String>,
+    #[allow(dead_code)]
+    using: String,
+    value: String,
+}
+
+async fn shadow_find<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(body): Json<ShadowFindReq>,
+) -> ApiResult {
+    let host_find_fn = if body.host_using.as_deref() == Some("xpath") {
+        "findElementByXPath"
+    } else {
+        "findElement"
+    };
+    let host_sel_json = serde_json::to_string(&body.host_selector).unwrap();
+    let val_json = serde_json::to_string(&body.value).unwrap();
+
+    let script = format!(
+        "if(!window.__wdShadowCtr)window.__wdShadowCtr=0;\
+         var host=window.__WEBDRIVER__.{host_find_fn}({host_sel_json},{host_index});\
+         if(!host)throw new Error('host element not found');\
+         var sr=host.shadowRoot;\
+         if(!sr)throw new Error('no shadow root');\
+         var els=sr.querySelectorAll({val_json});\
+         var a=[];for(var i=0;i<els.length;i++){{\
+         var id='wds-'+(++window.__wdShadowCtr);\
+         window.__WEBDRIVER__.__shadowCache[id]=els[i];\
+         a.push({{selector:id,index:0,using:'shadow'}})}}\
+         return a",
+        host_find_fn = host_find_fn,
+        host_sel_json = host_sel_json,
+        host_index = body.host_index,
+        val_json = val_json,
+    );
+
+    let result = eval_js(&state, &script).await?;
+    Ok(Json(json!({"elements": result})))
+}
+
+// --- Switch to window handler ---
+
+#[derive(Deserialize)]
+struct SwitchWindowReq {
+    label: String,
+}
+
+async fn window_set_current<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(body): Json<SwitchWindowReq>,
+) -> ApiResult {
+    // Validate window exists
+    state
+        .app
+        .get_webview_window(&body.label)
+        .ok_or_else(|| ApiError::NotFound(format!("window '{}' not found", body.label)))?;
+    *state
+        .current_window_label
+        .lock()
+        .expect("lock poisoned") = Some(body.label.clone());
+    Ok(Json(json!(true)))
+}
+
+// --- Find element from element (scoped search) ---
+
+#[derive(Deserialize)]
+struct FindFromReq {
+    parent_selector: String,
+    parent_index: usize,
+    #[serde(default)]
+    parent_using: Option<String>,
+    using: String,
+    value: String,
+}
+
+async fn element_find_from<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(body): Json<FindFromReq>,
+) -> ApiResult {
+    let parent_sel_json = serde_json::to_string(&body.parent_selector).unwrap();
+    let val_json = serde_json::to_string(&body.value).unwrap();
+
+    // Find parent using document.querySelectorAll/evaluate directly
+    // (works in both frame and top-level contexts since eval_js shadows document).
+    let parent_js = if body.parent_using.as_deref() == Some("xpath") {
+        format!(
+            "var __xr=document.evaluate({sel},document,null,\
+             XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);\
+             var parent=__xr.snapshotItem({idx});\
+             if(!parent)throw new Error('parent element not found');",
+            sel = parent_sel_json,
+            idx = body.parent_index,
+        )
+    } else {
+        format!(
+            "var parent=document.querySelectorAll({sel})[{idx}];\
+             if(!parent)throw new Error('parent element not found');",
+            sel = parent_sel_json,
+            idx = body.parent_index,
+        )
+    };
+
+    let child_js = if body.using == "xpath" {
+        format!(
+            "var r=document.evaluate({v},parent,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);\
+             var a=[];for(var i=0;i<r.snapshotLength;i++){{\
+             var e=r.snapshotItem(i);var id='wd-'+(++window.__wdFindFromCtr);\
+             e.setAttribute('data-wd-id',id);\
+             a.push({{selector:'[data-wd-id=\"'+id+'\"]',index:0}})}}\
+             return a",
+            v = val_json,
+        )
+    } else {
+        format!(
+            "var els=parent.querySelectorAll({v});\
+             var a=[];for(var i=0;i<els.length;i++){{\
+             var id='wd-'+(++window.__wdFindFromCtr);\
+             els[i].setAttribute('data-wd-id',id);\
+             a.push({{selector:'[data-wd-id=\"'+id+'\"]',index:0}})}}\
+             return a",
+            v = val_json,
+        )
+    };
+
+    let script = format!(
+        "if(!window.__wdFindFromCtr)window.__wdFindFromCtr=0;\
+         {parent_js}{child_js}"
+    );
+
+    let result = eval_js(&state, &script).await?;
+    Ok(Json(json!({"elements": result})))
+}
+
+// --- Computed ARIA role + label handlers ---
+
+async fn element_computed_role<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(body): Json<ElemReq>,
+) -> ApiResult {
+    let js = r#"var tag=el.tagName.toLowerCase();
+var role=el.getAttribute('role');
+if(role)return role;
+var map={button:'button',a:'link',h1:'heading',h2:'heading',h3:'heading',h4:'heading',h5:'heading',h6:'heading',
+input:'textbox',textarea:'textbox',select:'combobox',option:'option',ul:'list',ol:'list',li:'listitem',
+table:'table',tr:'row',td:'cell',th:'columnheader',img:'img',nav:'navigation',main:'main',header:'banner',
+footer:'contentinfo',aside:'complementary',form:'form',details:'group',summary:'button',dialog:'dialog',
+progress:'progressbar',meter:'meter'};
+if(tag==='input'){var t=(el.getAttribute('type')||'text').toLowerCase();
+if(t==='checkbox')return 'checkbox';if(t==='radio')return 'radio';
+if(t==='range')return 'slider';if(t==='number')return 'spinbutton';
+if(t==='search')return 'searchbox';return 'textbox'}
+if(tag==='a'&&el.hasAttribute('href'))return 'link';
+return map[tag]||'generic'"#;
+    let result = eval_on_element(
+        &state,
+        &body.selector,
+        body.index,
+        body.using.as_deref(),
+        js,
+    )
+    .await?;
+    Ok(Json(json!({"role": result})))
+}
+
+async fn element_computed_label<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(body): Json<ElemReq>,
+) -> ApiResult {
+    let js = r#"var lblBy=el.getAttribute('aria-labelledby');
+if(lblBy){var ids=lblBy.split(/\s+/);var parts=[];
+for(var i=0;i<ids.length;i++){var e=document.getElementById(ids[i]);if(e)parts.push(e.textContent.trim())}
+if(parts.length)return parts.join(' ')}
+var lbl=el.getAttribute('aria-label');if(lbl)return lbl;
+if(el.id){var labels=document.querySelectorAll('label[for="'+el.id+'"]');
+if(labels.length)return labels[0].textContent.trim()}
+if(el.placeholder)return el.placeholder;
+if(el.alt)return el.alt;
+if(el.title)return el.title;
+return ''"#;
+    let result = eval_on_element(
+        &state,
+        &body.selector,
+        body.index,
+        body.using.as_deref(),
+        js,
+    )
+    .await?;
+    Ok(Json(json!({"label": result})))
+}
+
+// --- Active element handler ---
+
+async fn element_active<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(_body): Json<Value>,
+) -> ApiResult {
+    let result =
+        eval_js(&state, "return window.__WEBDRIVER__.getActiveElement()").await?;
+    Ok(Json(json!({"element": result})))
+}
+
+// --- Page source handler ---
+
+async fn get_source<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(_body): Json<Value>,
+) -> ApiResult {
+    let result =
+        eval_js(&state, "return document.documentElement.outerHTML").await?;
+    Ok(Json(json!({"source": result})))
+}
+
+// --- Frame handlers ---
+
+#[derive(Deserialize)]
+struct FrameSwitchReq {
+    id: Value, // null = top, number = index, object = element ref
+}
+
+async fn frame_switch<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(body): Json<FrameSwitchReq>,
+) -> ApiResult {
+    if body.id.is_null() {
+        // Switch to top-level browsing context: clear the frame stack
+        state.frame_stack.lock().expect("lock poisoned").clear();
+        return Ok(Json(json!(null)));
+    }
+
+    if let Some(index) = body.id.as_u64() {
+        // Switch by frame index
+        state
+            .frame_stack
+            .lock()
+            .expect("lock poisoned")
+            .push(FrameRef {
+                selector: "iframe".to_string(),
+                index: index as usize,
+            });
+        return Ok(Json(json!(null)));
+    }
+
+    if let Some(obj) = body.id.as_object() {
+        // Switch by element reference: {selector, index}
+        let selector = obj
+            .get("selector")
+            .and_then(|s| s.as_str())
+            .ok_or_else(|| ApiError::Internal("frame element missing selector".into()))?
+            .to_string();
+        let index = obj
+            .get("index")
+            .and_then(|i| i.as_u64())
+            .unwrap_or(0) as usize;
+        state
+            .frame_stack
+            .lock()
+            .expect("lock poisoned")
+            .push(FrameRef { selector, index });
+        return Ok(Json(json!(null)));
+    }
+
+    Err(ApiError::Internal("invalid frame id".into()))
+}
+
+async fn frame_parent<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(_body): Json<Value>,
+) -> ApiResult {
+    let mut stack = state.frame_stack.lock().expect("lock poisoned");
+    stack.pop(); // If already at top, this is a no-op
+    Ok(Json(json!(null)))
+}
+
 // --- Server entry point ---
 
 pub(crate) async fn start<R: Runtime>(
     app: tauri::AppHandle<R>,
     _webview_created_rx: tokio::sync::broadcast::Receiver<tauri::WebviewWindow<R>>,
 ) {
-    let state: SharedState<R> = Arc::new(ServerState { app });
+    let state: SharedState<R> = Arc::new(ServerState {
+        app,
+        current_window_label: std::sync::Mutex::new(None),
+        frame_stack: std::sync::Mutex::new(Vec::new()),
+    });
 
     let router = Router::new()
         // Window
@@ -1138,6 +1534,7 @@ pub(crate) async fn start<R: Runtime>(
         .route("/window/minimize", post(window_minimize::<R>))
         .route("/window/maximize", post(window_maximize::<R>))
         .route("/window/insets", post(window_insets::<R>))
+        .route("/window/set-current", post(window_set_current::<R>))
         // Elements
         .route("/element/find", post(element_find::<R>))
         .route("/element/text", post(element_text::<R>))
@@ -1151,6 +1548,12 @@ pub(crate) async fn start<R: Runtime>(
         .route("/element/displayed", post(element_displayed::<R>))
         .route("/element/enabled", post(element_enabled::<R>))
         .route("/element/selected", post(element_selected::<R>))
+        .route("/element/active", post(element_active::<R>))
+        .route("/element/find-from", post(element_find_from::<R>))
+        .route("/element/shadow", post(element_shadow::<R>))
+        .route("/shadow/find", post(shadow_find::<R>))
+        .route("/element/computed-role", post(element_computed_role::<R>))
+        .route("/element/computed-label", post(element_computed_label::<R>))
         // Scripts
         .route("/script/execute", post(script_execute::<R>))
         .route("/script/execute-async", post(script_execute_async::<R>))
@@ -1170,9 +1573,14 @@ pub(crate) async fn start<R: Runtime>(
         .route("/cookie/add", post(cookie_add::<R>))
         .route("/cookie/delete", post(cookie_delete::<R>))
         .route("/cookie/delete-all", post(cookie_delete_all::<R>))
+        // Page source
+        .route("/source", post(get_source::<R>))
         // Actions
         .route("/actions/perform", post(actions_perform::<R>))
         .route("/actions/release", post(actions_release::<R>))
+        // Frames
+        .route("/frame/switch", post(frame_switch::<R>))
+        .route("/frame/parent", post(frame_parent::<R>))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

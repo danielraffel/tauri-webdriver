@@ -9,6 +9,7 @@
     <h1 id="title">Test App</h1>
     <p id="counter">Count: 0</p>
     <button id="increment">Increment</button>
+    <label for="text-input">Enter text</label>
     <input id="text-input" type="text" placeholder="Type here" />
     <a id="link" href="/page2">Go to page 2</a>
     <select id="dropdown">
@@ -16,7 +17,19 @@
       <option value="b" selected>Option B</option>
     </select>
     <div id="hidden" style="display:none">Hidden content</div>
+    <my-widget id="shadow-host"></my-widget>
+    <iframe id="test-frame" srcdoc="<html><body><h2 id='frame-title'>Inside Frame</h2><p id='frame-text'>Frame content here</p></body></html>"></iframe>
   </div>
+  <script>
+    class MyWidget extends HTMLElement {
+      constructor() {
+        super();
+        var shadow = this.attachShadow({ mode: 'open' });
+        shadow.innerHTML = '<span class="shadow-text">Shadow Content</span><button class="shadow-btn">Shadow Button</button>';
+      }
+    }
+    customElements.define('my-widget', MyWidget);
+  </script>
   <script>
     document.getElementById('increment').addEventListener('click', function() {
       var counter = document.getElementById('counter');

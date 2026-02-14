@@ -18,7 +18,7 @@ Default permissions for the WebDriver plugin
 <tr>
 <td>
 
-`webdriver:allow-resolve`
+`webdriver-automation:allow-resolve`
 
 </td>
 <td>
@@ -31,7 +31,7 @@ Enables the resolve command without any pre-configured scope.
 <tr>
 <td>
 
-`webdriver:deny-resolve`
+`webdriver-automation:deny-resolve`
 
 </td>
 <td>

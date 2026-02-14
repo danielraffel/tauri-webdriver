@@ -1,4 +1,4 @@
-// tauri-plugin-webdriver: Tauri plugin enabling WebDriver-based e2e testing.
+// tauri-plugin-webdriver-automation: Tauri plugin enabling WebDriver-based e2e testing.
 //
 // This plugin runs an HTTP server inside the Tauri app (debug builds only) that
 // allows an external WebDriver server to interact with the webview: find elements,
@@ -42,7 +42,7 @@ pub(crate) struct WebDriverState {
 pub fn init<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
     let (webview_created_tx, webview_created_rx) = tokio::sync::broadcast::channel(16);
 
-    tauri::plugin::Builder::new("webdriver")
+    tauri::plugin::Builder::new("webdriver-automation")
         .invoke_handler(tauri::generate_handler![resolve])
         .js_init_script(include_str!("init.js").to_string())
         .on_webview_ready(move |webview| {
@@ -62,12 +62,12 @@ pub fn init<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
             });
 
             app.add_capability(
-                tauri::ipc::CapabilityBuilder::new("webdriver")
+                tauri::ipc::CapabilityBuilder::new("webdriver-automation")
                     .local(true)
                     .window("*")
                     .remote("http://*".into())
                     .remote("https://*".into())
-                    .permission("webdriver:default"),
+                    .permission("webdriver-automation:default"),
             )?;
 
             // Start the HTTP server that the external WebDriver CLI connects to.

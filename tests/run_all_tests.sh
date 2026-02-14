@@ -2,7 +2,7 @@
 set -e
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-echo "=== Building tauri-webdriver ==="
+echo "=== Building tauri-webdriver-automation ==="
 cd "$ROOT" && cargo build 2>&1
 echo ""
 echo "=== Building test app ==="
