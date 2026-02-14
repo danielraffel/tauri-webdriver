@@ -8,7 +8,9 @@
 
 **Open-source macOS WebDriver for Tauri apps.**
 
-Enables automated end-to-end testing of Tauri desktop applications on macOS, where no native WKWebView WebDriver exists.
+Enables automated end-to-end testing of Tauri desktop applications on macOS, where no native WKWebView WebDriver exists. 
+
+_Disclosure: The code for this project was written in collaboration with Claude Code_
 
 ## The Problem
 
@@ -250,6 +252,9 @@ When we started building this, we were developing a macOS Tauri app and frustrat
 
 - **[tauri-plugin-webdriver](https://github.com/Choochmeque/tauri-plugin-webdriver)** -- Open-source Tauri plugin that embeds a WebDriver server directly in the plugin (single-crate architecture vs our two-crate approach). Supports **macOS**, **Linux**, and **Windows** -- if you need cross-platform WebDriver support, this is the more mature choice.
 - **[CrabNebula Cloud](https://docs.crabnebula.dev/plugins/tauri-e2e-tests/#macos-support)** -- Commercial hosted testing service with macOS WebDriver support.
+
+## Additional info
+- [Blog post](https://danielraffel.me/2026/02/14/i-built-a-webdriver-for-wkwebview-tauri-apps-on-macos/) with some additional background info.
 
 ## License
 
