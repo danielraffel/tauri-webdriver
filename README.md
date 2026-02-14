@@ -3,7 +3,7 @@
 [![CI](https://github.com/danielraffel/tauri-webdriver/workflows/CI/badge.svg)](https://github.com/danielraffel/tauri-webdriver/actions)
 [![Crates.io](https://img.shields.io/crates/v/tauri-webdriver-automation.svg)](https://crates.io/crates/tauri-webdriver-automation)
 [![Plugin Crate](https://img.shields.io/crates/v/tauri-plugin-webdriver-automation.svg?label=plugin)](https://crates.io/crates/tauri-plugin-webdriver-automation)
-[![Docs.rs](https://docs.rs/tauri-webdriver-automation/badge.svg)](https://docs.rs/tauri-webdriver-automation)
+[![Docs.rs](https://img.shields.io/docsrs/tauri-plugin-webdriver-automation/latest)](https://docs.rs/tauri-plugin-webdriver-automation)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 
 **Open-source macOS WebDriver for Tauri apps.**
