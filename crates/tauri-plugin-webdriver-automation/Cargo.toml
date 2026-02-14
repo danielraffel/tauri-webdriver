@@ -1,6 +1,6 @@
 [package]
 name = "tauri-plugin-webdriver-automation"
-version = "0.1.0"
+version = "0.1.1"
 description = "Tauri plugin that enables WebDriver-based e2e testing on macOS"
 authors = ["Generous Corp"]
 links = "tauri-plugin-webdriver-automation"
