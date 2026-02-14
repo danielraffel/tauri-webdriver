@@ -102,7 +102,7 @@ npx vite --port 5173          # Vite
 # npx webpack serve            # Webpack
 ```
 
-To have Claude Code handle this automatically, add a note to your project's `CLAUDE.md`:
+To have your agent (Claude Code, Codex, etc) handle this automatically, add a note to your project's `CLAUDE.md` or `AGENTS.md`:
 
 ```md
 ## WebDriver / MCP Automation
