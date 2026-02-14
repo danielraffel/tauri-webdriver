@@ -84,7 +84,7 @@ else:
 
 # Start CLI server in background
 echo "Starting tauri-wd CLI on port $PORT..."
-$CLI_BIN --port $PORT --log-level debug &
+$CLI_BIN --port $PORT --max-sessions 1 --log-level debug &
 CLI_PID=$!
 sleep 1
 
@@ -388,6 +388,26 @@ run_test "Pointer actions (click)" "POST" "/session/$SESSION_ID/actions" '{"acti
 
 # Release actions
 run_test "Release actions" "DELETE" "/session/$SESSION_ID/actions" "" 'null'
+
+echo ""
+echo "=== File Upload ==="
+# Create a temporary test file
+echo "hello world" > /tmp/tauri-webdriver-test-upload.txt
+# Find the file input element
+run_test "Find #file-input" "POST" "/session/$SESSION_ID/element" '{"using":"css selector","value":"#file-input"}' '"element-6066'
+extract_element_id FILE_INPUT_EID
+echo "      File Input Element ID: $FILE_INPUT_EID"
+if [ -n "$FILE_INPUT_EID" ]; then
+  run_test "Send file path to file input" "POST" "/session/$SESSION_ID/element/$FILE_INPUT_EID/value" '{"text":"/tmp/tauri-webdriver-test-upload.txt"}' 'null'
+  sleep 0.5
+  # Verify file was set by checking the file-status text
+  run_test "Find #file-status" "POST" "/session/$SESSION_ID/element" '{"using":"css selector","value":"#file-status"}' '"element-6066'
+  extract_element_id FILE_STATUS_EID
+  if [ -n "$FILE_STATUS_EID" ]; then
+    run_test "Verify file upload status" "GET" "/session/$SESSION_ID/element/$FILE_STATUS_EID/text" "" '"File: tauri-webdriver-test-upload.txt'
+  fi
+fi
+rm -f /tmp/tauri-webdriver-test-upload.txt
 
 echo ""
 echo "=== Session Cleanup ==="

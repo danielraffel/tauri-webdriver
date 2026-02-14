@@ -94,12 +94,14 @@ export const config = {
 ### 4. Run tests
 
 ```sh
-# Terminal 1: Start the WebDriver server
+# Terminal 1: Start the WebDriver server (supports concurrent sessions)
 tauri-wd --port 4444
 
 # Terminal 2: Run your tests
 npx wdio run wdio.conf.mjs
 ```
+
+> **Want AI-driven automation instead?** See [MCP Integration](#mcp-integration) to control your Tauri app with Claude Code through natural language.
 
 ## Supported W3C WebDriver Operations
 
@@ -153,7 +155,7 @@ All operations follow the [W3C WebDriver specification](https://www.w3.org/TR/we
 | `/session/{id}/element/{eid}/elements` | POST | Find all elements scoped to a parent |
 | `/session/{id}/element/{eid}/click` | POST | Click an element |
 | `/session/{id}/element/{eid}/clear` | POST | Clear an input element |
-| `/session/{id}/element/{eid}/value` | POST | Send keystrokes to an element |
+| `/session/{id}/element/{eid}/value` | POST | Send keystrokes to an element (file paths for `<input type="file">`) |
 | `/session/{id}/element/{eid}/text` | GET | Get element's visible text |
 | `/session/{id}/element/{eid}/name` | GET | Get element's tag name |
 | `/session/{id}/element/{eid}/attribute/{name}` | GET | Get an HTML attribute value |
@@ -229,18 +231,45 @@ All operations follow the [W3C WebDriver specification](https://www.w3.org/TR/we
 
 ## MCP Integration
 
-`tauri-webdriver` works with [mcp-tauri-automation](https://github.com/danielraffel/mcp-tauri-automation) to enable AI-driven automation of Tauri apps via the [Model Context Protocol](https://modelcontextprotocol.io/). This lets AI agents (like Claude Code) launch, inspect, interact with, and screenshot your Tauri app.
+`tauri-webdriver` works with [mcp-tauri-automation](https://github.com/danielraffel/mcp-tauri-automation) to enable AI-driven automation of Tauri apps via the [Model Context Protocol](https://modelcontextprotocol.io/). This lets AI agents (like Claude Code) launch, inspect, interact with, and screenshot your Tauri app through natural language.
+
+### Setup
+
+**1. Install the MCP server:**
 
 ```sh
-# 1. Start tauri-wd
-tauri-wd --port 4444
-
-# 2. Configure mcp-tauri-automation in your MCP client
-# The MCP server connects to tauri-wd on port 4444
-# and exposes tools like launch_app, click_element, capture_screenshot, etc.
+git clone https://github.com/danielraffel/mcp-tauri-automation.git
+cd mcp-tauri-automation
+npm install && npm run build
 ```
 
-> **Note:** This project recommends the [danielraffel/mcp-tauri-automation](https://github.com/danielraffel/mcp-tauri-automation) fork which includes additional tools (execute_script, get_page_title, get_page_url, multi-strategy selectors, configurable screenshot timeouts, wait_for_navigation). PRs have been submitted upstream to [Radek44/mcp-tauri-automation](https://github.com/Radek44/mcp-tauri-automation).
+**2. Add to Claude Code:**
+
+```sh
+claude mcp add --transport stdio tauri-automation \
+  --scope user \
+  -- node /absolute/path/to/mcp-tauri-automation/dist/index.js
+```
+
+Optionally set a default app path so you don't have to specify it every time:
+
+```sh
+claude mcp add --transport stdio tauri-automation \
+  --env TAURI_APP_PATH=/path/to/your-app/src-tauri/target/debug/your-app \
+  --scope user \
+  -- node /absolute/path/to/mcp-tauri-automation/dist/index.js
+```
+
+**3. Start `tauri-wd` and use with Claude:**
+
+```sh
+# Keep this running in a separate terminal
+tauri-wd --port 4444
+```
+
+Then ask Claude: *"Launch my Tauri app and take a screenshot"*
+
+> **Note:** [mcp-tauri-automation](https://github.com/danielraffel/mcp-tauri-automation) is a fork of [Radek44/mcp-tauri-automation](https://github.com/Radek44/mcp-tauri-automation) with additional tools (execute_script, get_page_title, get_page_url, multi-strategy selectors, configurable timeouts, wait_for_navigation). These additions have been [submitted upstream](https://github.com/Radek44/mcp-tauri-automation). For cross-platform MCP support, see the [original project](https://github.com/Radek44/mcp-tauri-automation).
 
 ## Architecture
 

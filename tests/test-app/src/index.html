@@ -21,6 +21,8 @@
     <button id="trigger-alert" onclick="window.__alertResult = (alert('Hello Alert'), 'done')">Alert</button>
     <button id="trigger-confirm" onclick="window.__confirmResult = confirm('Are you sure?')">Confirm</button>
     <button id="trigger-prompt" onclick="window.__promptResult = prompt('Enter name', 'default')">Prompt</button>
+    <input id="file-input" type="file" />
+    <span id="file-status">No file selected</span>
     <iframe id="test-frame" srcdoc="<html><body><h2 id='frame-title'>Inside Frame</h2><p id='frame-text'>Frame content here</p></body></html>"></iframe>
   </div>
   <script>
@@ -38,6 +40,14 @@
       var counter = document.getElementById('counter');
       var count = parseInt(counter.textContent.split(': ')[1]) + 1;
       counter.textContent = 'Count: ' + count;
+    });
+    document.getElementById('file-input').addEventListener('change', function() {
+      var status = document.getElementById('file-status');
+      if (this.files.length > 0) {
+        status.textContent = 'File: ' + this.files[0].name + ' (' + this.files[0].size + ' bytes)';
+      } else {
+        status.textContent = 'No file selected';
+      }
     });
   </script>
 </body>

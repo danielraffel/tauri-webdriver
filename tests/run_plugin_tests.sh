@@ -177,6 +177,17 @@ run_test "Send text to prompt" "/alert/send-text" '{"text":"Bob"}' 'null'
 run_test "Accept prompt" "/alert/accept" '{}' 'null'
 
 echo ""
+echo "=== File Upload ==="
+# Create a temporary test file
+echo "hello world" > /tmp/tauri-webdriver-test-upload.txt
+# Set files on the file input using base64 data
+FILE_B64=$(base64 < /tmp/tauri-webdriver-test-upload.txt | tr -d '\n')
+run_test "Set file on input" "/element/set-files" "{\"selector\":\"#file-input\",\"index\":0,\"files\":[{\"name\":\"test.txt\",\"data\":\"$FILE_B64\",\"mime\":\"text/plain\"}]}" 'null'
+sleep 0.3
+run_test "Verify file status text" "/element/text" '{"selector":"#file-status","index":0}' '"File: test.txt'
+rm -f /tmp/tauri-webdriver-test-upload.txt
+
+echo ""
 echo "=== Screenshots ==="
 run_test "Full page screenshot" "/screenshot" "{}" '"data"'
 run_test "Element screenshot (#title)" "/screenshot/element" '{"selector":"#title","index":0}' '"data"'

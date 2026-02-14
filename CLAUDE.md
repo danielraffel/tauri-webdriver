@@ -53,12 +53,13 @@ Single-file CLI binary (`main.rs`). Implements the W3C WebDriver HTTP protocol o
 - Translates W3C requests into plugin HTTP API calls via `plugin_post()`
 - Manages element state: maps W3C element UUIDs ↔ `(css_selector, index, using)` triples
 - Manages shadow root refs: maps W3C shadow UUIDs ↔ host element info
-- Single-session: one active session at a time
+- Multi-session: concurrent sessions via `HashMap<String, Session>`, configurable with `--max-sessions`
+- File upload: detects `<input type="file">`, reads files from disk, base64-encodes, forwards to plugin `/element/set-files`
 - Uses `{param}` path syntax (axum 0.8)
 
 ### Test App (`tests/test-app/`)
 
-Minimal Tauri app with testable elements (counter button, text input, dropdown, hidden div, shadow DOM web component, iframe). Separate Cargo workspace — build with `cd tests/test-app/src-tauri && cargo build`.
+Minimal Tauri app with testable elements (counter button, text input, dropdown, hidden div, shadow DOM web component, file input, alert/confirm/prompt buttons, iframe). Separate Cargo workspace — build with `cd tests/test-app/src-tauri && cargo build`.
 
 ## Key Conventions
 
@@ -74,7 +75,10 @@ Minimal Tauri app with testable elements (counter button, text input, dropdown, 
 - **Frame/iframe**: Plugin tracks a frame stack (`Vec<FrameRef>`). When non-empty, `eval_js()` prepends JS that navigates the iframe hierarchy via `contentDocument` and passes the target frame's document as a function parameter to avoid JS hoisting issues.
 - **Alerts/Dialogs**: `window.alert()`, `window.confirm()`, `window.prompt()` are intercepted in `init.js`. State is stored in `window.__WEBDRIVER__.__dialog`. Plugin endpoints: `/alert/text`, `/alert/dismiss`, `/alert/accept`, `/alert/send-text`. CLI maps "no such alert" errors to W3C `"no such alert"` (HTTP 404).
 - **New Window**: Plugin `/window/new` creates a new `WebviewWindow` via Tauri's builder API. CLI `POST /session/{id}/window/new` returns `{handle, type}`.
+- **Multi-window fixes**: `Switch To Window` focuses the target window and resets the frame stack to top-level. `Close Window` clears the stale `current_window_label` if the closed window was active, and resets the frame stack.
+- **File upload**: W3C `Send Keys` on `<input type="file">` is detected by the CLI (checks tag name + type attribute). CLI reads file(s) from disk, base64-encodes, sends to plugin's `/element/set-files`. Plugin uses the DataTransfer API to create File objects and assign to `input.files`.
 - **Print to PDF**: Plugin `/print` uses the same SVG foreignObject approach as screenshots, then wraps the rendered PNG in a minimal PDF 1.4 structure. Returns base64-encoded PDF.
+- **Multi-session**: CLI uses `HashMap<String, Session>` instead of `Option<Session>`. `--max-sessions 0` (default) means unlimited. Status endpoint reports `ready` based on capacity vs current count.
 - **Error mapping**: Plugin HTTP 500 → `W3cError`. Script execution errors specifically map to `"javascript error"` W3C error code.
 - **Debug-only plugin**: The plugin should only be registered in debug builds via `#[cfg(debug_assertions)]`.
 

@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine as _;
+
 use axum::extract::{Path, State as AxumState};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -36,6 +38,10 @@ struct Cli {
     /// Log level: error, warn, info, debug, trace
     #[arg(long, default_value = "info")]
     log_level: String,
+
+    /// Maximum concurrent sessions (0 = unlimited)
+    #[arg(long, default_value = "0")]
+    max_sessions: usize,
 }
 
 // --- State types ---
@@ -69,7 +75,6 @@ impl Default for Timeouts {
 }
 
 struct Session {
-    id: String,
     plugin_url: String,
     process: tokio::process::Child,
     elements: HashMap<String, ElementRef>,
@@ -79,7 +84,8 @@ struct Session {
 }
 
 struct AppState {
-    session: Mutex<Option<Session>>,
+    sessions: Mutex<HashMap<String, Session>>,
+    max_sessions: usize,
 }
 
 type SharedState = Arc<AppState>;
@@ -251,32 +257,35 @@ fn store_element(session: &mut Session, elem: &Value) -> String {
     eid
 }
 
-fn check_session<'a>(session: &'a Option<Session>, sid: &str) -> Result<&'a Session, W3cError> {
-    let s = session.as_ref().ok_or(W3cError::no_session())?;
-    if s.id != sid {
-        return Err(W3cError::no_session());
-    }
-    Ok(s)
+fn get_session<'a>(
+    sessions: &'a HashMap<String, Session>,
+    sid: &str,
+) -> Result<&'a Session, W3cError> {
+    sessions.get(sid).ok_or(W3cError::no_session())
 }
 
-fn check_session_mut<'a>(
-    session: &'a mut Option<Session>,
+fn get_session_mut<'a>(
+    sessions: &'a mut HashMap<String, Session>,
     sid: &str,
 ) -> Result<&'a mut Session, W3cError> {
-    let s = session.as_mut().ok_or(W3cError::no_session())?;
-    if s.id != sid {
-        return Err(W3cError::no_session());
-    }
-    Ok(s)
+    sessions.get_mut(sid).ok_or(W3cError::no_session())
 }
 
 // --- Session handlers ---
 
 async fn get_status(AxumState(state): AxumState<SharedState>) -> Json<Value> {
-    let session = state.session.lock().await;
+    let sessions = state.sessions.lock().await;
+    let count = sessions.len();
+    let ready = state.max_sessions == 0 || count < state.max_sessions;
     w3c_value(json!({
-        "ready": session.is_none(),
-        "message": if session.is_none() { "ready" } else { "session active" }
+        "ready": ready,
+        "message": if count == 0 {
+            "ready".to_string()
+        } else if ready {
+            format!("{count} session(s) active, accepting more")
+        } else {
+            format!("{count} session(s) active, at capacity")
+        }
     }))
 }
 
@@ -284,9 +293,11 @@ async fn create_session(
     AxumState(state): AxumState<SharedState>,
     Json(body): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), W3cError> {
-    let mut session_guard = state.session.lock().await;
-    if session_guard.is_some() {
-        return Err(W3cError::session_not_created("A session already exists"));
+    let mut sessions = state.sessions.lock().await;
+    if state.max_sessions > 0 && sessions.len() >= state.max_sessions {
+        return Err(W3cError::session_not_created(
+            "Maximum number of sessions reached",
+        ));
     }
 
     // Extract binary path from capabilities.
@@ -357,15 +368,17 @@ async fn create_session(
     let plugin_url = format!("http://127.0.0.1:{port}");
     tracing::info!("Session {session_id} created, plugin at {plugin_url}");
 
-    *session_guard = Some(Session {
-        id: session_id.clone(),
-        plugin_url,
-        process: child,
-        elements: HashMap::new(),
-        shadows: HashMap::new(),
-        client: reqwest::Client::new(),
-        timeouts: Timeouts::default(),
-    });
+    sessions.insert(
+        session_id.clone(),
+        Session {
+            plugin_url,
+            process: child,
+            elements: HashMap::new(),
+            shadows: HashMap::new(),
+            client: reqwest::Client::new(),
+            timeouts: Timeouts::default(),
+        },
+    );
 
     Ok((
         StatusCode::OK,
@@ -384,13 +397,9 @@ async fn delete_session(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let mut guard = state.session.lock().await;
-    let session = guard.as_mut().ok_or(W3cError::no_session())?;
-    if session.id != sid {
-        return Err(W3cError::no_session());
-    }
+    let mut sessions = state.sessions.lock().await;
+    let mut session = sessions.remove(&sid).ok_or(W3cError::no_session())?;
     let _ = session.process.kill().await;
-    *guard = None;
     tracing::info!("Session {sid} deleted");
     Ok(w3c_value(json!(null)))
 }
@@ -401,8 +410,8 @@ async fn get_timeouts(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     Ok(w3c_value(json!({
         "script": session.timeouts.script,
         "pageLoad": session.timeouts.page_load,
@@ -415,8 +424,8 @@ async fn set_timeouts(
     Path(sid): Path<String>,
     Json(body): Json<Value>,
 ) -> W3cResult {
-    let mut guard = state.session.lock().await;
-    let session = check_session_mut(&mut guard, &sid)?;
+    let mut guard = state.sessions.lock().await;
+    let session = get_session_mut(&mut guard, &sid)?;
     if let Some(v) = body.get("script").and_then(|v| v.as_u64()) {
         session.timeouts.script = v;
     }
@@ -436,8 +445,8 @@ async fn navigate_to(
     Path(sid): Path<String>,
     Json(body): Json<Value>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let url = body
         .get("url")
         .and_then(|v| v.as_str())
@@ -450,8 +459,8 @@ async fn get_url(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let result = plugin_post(session, "/navigate/current", json!({})).await?;
     Ok(w3c_value(
         result.get("url").cloned().unwrap_or(json!("")),
@@ -462,8 +471,8 @@ async fn get_title(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let result = plugin_post(session, "/navigate/title", json!({})).await?;
     Ok(w3c_value(
         result.get("title").cloned().unwrap_or(json!("")),
@@ -474,8 +483,8 @@ async fn go_back(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     plugin_post(session, "/navigate/back", json!({})).await?;
     Ok(w3c_value(json!(null)))
 }
@@ -484,8 +493,8 @@ async fn go_forward(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     plugin_post(session, "/navigate/forward", json!({})).await?;
     Ok(w3c_value(json!(null)))
 }
@@ -494,8 +503,8 @@ async fn refresh(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     plugin_post(session, "/navigate/refresh", json!({})).await?;
     Ok(w3c_value(json!(null)))
 }
@@ -506,8 +515,8 @@ async fn get_window_handle(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let result = plugin_post(session, "/window/handle", json!({})).await?;
     Ok(w3c_value(result))
 }
@@ -516,8 +525,8 @@ async fn close_window(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let handle = plugin_post(session, "/window/handle", json!({})).await?;
     let label = handle.as_str().unwrap_or("main");
     plugin_post(session, "/window/close", json!({"label": label})).await?;
@@ -529,8 +538,8 @@ async fn get_window_handles(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let result = plugin_post(session, "/window/handles", json!({})).await?;
     Ok(w3c_value(result))
 }
@@ -539,8 +548,8 @@ async fn get_window_rect(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let result = plugin_post(session, "/window/rect", json!({})).await?;
     Ok(w3c_value(result))
 }
@@ -550,8 +559,8 @@ async fn set_window_rect(
     Path(sid): Path<String>,
     Json(body): Json<Value>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     plugin_post(session, "/window/set-rect", body).await?;
     let result = plugin_post(session, "/window/rect", json!({})).await?;
     Ok(w3c_value(result))
@@ -561,8 +570,8 @@ async fn maximize_window(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     plugin_post(session, "/window/maximize", json!({})).await?;
     let result = plugin_post(session, "/window/rect", json!({})).await?;
     Ok(w3c_value(result))
@@ -572,8 +581,8 @@ async fn minimize_window(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     plugin_post(session, "/window/minimize", json!({})).await?;
     let result = plugin_post(session, "/window/rect", json!({})).await?;
     Ok(w3c_value(result))
@@ -583,8 +592,8 @@ async fn fullscreen_window(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     plugin_post(session, "/window/fullscreen", json!({})).await?;
     let result = plugin_post(session, "/window/rect", json!({})).await?;
     Ok(w3c_value(result))
@@ -597,8 +606,8 @@ async fn new_window(
     Path(sid): Path<String>,
     Json(body): Json<Value>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let result = plugin_post(session, "/window/new", body).await?;
     let handle = result.get("handle").cloned().unwrap_or(json!(""));
     let type_val = result.get("type").cloned().unwrap_or(json!("window"));
@@ -612,8 +621,8 @@ async fn find_element(
     Path(sid): Path<String>,
     Json(body): Json<Value>,
 ) -> W3cResult {
-    let mut guard = state.session.lock().await;
-    let session = check_session_mut(&mut guard, &sid)?;
+    let mut guard = state.sessions.lock().await;
+    let session = get_session_mut(&mut guard, &sid)?;
     let (using, value) = extract_locator(&body)?;
     let result =
         plugin_post(session, "/element/find", json!({"using": using, "value": value})).await?;
@@ -646,8 +655,8 @@ async fn find_elements(
     Path(sid): Path<String>,
     Json(body): Json<Value>,
 ) -> W3cResult {
-    let mut guard = state.session.lock().await;
-    let session = check_session_mut(&mut guard, &sid)?;
+    let mut guard = state.sessions.lock().await;
+    let session = get_session_mut(&mut guard, &sid)?;
     let (using, value) = extract_locator(&body)?;
     let result =
         plugin_post(session, "/element/find", json!({"using": using, "value": value})).await?;
@@ -673,8 +682,8 @@ async fn click_element(
     AxumState(state): AxumState<SharedState>,
     Path((sid, eid)): Path<(String, String)>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let elem = resolve_element(session, &eid)?;
     plugin_post(
         session,
@@ -689,8 +698,8 @@ async fn clear_element(
     AxumState(state): AxumState<SharedState>,
     Path((sid, eid)): Path<(String, String)>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let elem = resolve_element(session, &eid)?;
     plugin_post(
         session,
@@ -706,13 +715,65 @@ async fn send_keys(
     Path((sid, eid)): Path<(String, String)>,
     Json(body): Json<Value>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let elem = resolve_element(session, &eid)?;
     let text = body
         .get("text")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+
+    // Check if this is a file input by querying its tag and type attribute.
+    let tag_result = plugin_post(
+        session,
+        "/element/tag",
+        json!({"selector": elem.selector, "index": elem.index, "using": elem.using}),
+    )
+    .await?;
+    let tag = tag_result
+        .get("tag")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if tag.eq_ignore_ascii_case("input") {
+        let attr_result = plugin_post(
+            session,
+            "/element/attribute",
+            json!({"selector": elem.selector, "index": elem.index, "using": elem.using, "name": "type"}),
+        )
+        .await?;
+        let input_type = attr_result
+            .get("value")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if input_type.eq_ignore_ascii_case("file") {
+            // W3C spec: text contains newline-separated file paths.
+            let paths: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+            let mut files = Vec::new();
+            for path in &paths {
+                let data = tokio::fs::read(path)
+                    .await
+                    .map_err(|e| W3cError::bad_request(format!("Cannot read file {path}: {e}")))?;
+                let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+                let name = std::path::Path::new(path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file")
+                    .to_string();
+                let mime = mime_from_extension(path);
+                files.push(json!({"name": name, "data": encoded, "mime": mime}));
+            }
+            plugin_post(
+                session,
+                "/element/set-files",
+                json!({"selector": elem.selector, "index": elem.index, "using": elem.using, "files": files}),
+            )
+            .await?;
+            return Ok(w3c_value(json!(null)));
+        }
+    }
+
     plugin_post(
         session,
         "/element/send-keys",
@@ -722,12 +783,39 @@ async fn send_keys(
     Ok(w3c_value(json!(null)))
 }
 
+fn mime_from_extension(path: &str) -> String {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    match ext.as_str() {
+        "txt" => "text/plain",
+        "html" | "htm" => "text/html",
+        "css" => "text/css",
+        "js" => "application/javascript",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "webp" => "image/webp",
+        "mp4" => "video/mp4",
+        "mp3" => "audio/mpeg",
+        _ => "application/octet-stream",
+    }
+    .to_string()
+}
+
 async fn get_element_text(
     AxumState(state): AxumState<SharedState>,
     Path((sid, eid)): Path<(String, String)>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let elem = resolve_element(session, &eid)?;
     let result = plugin_post(
         session,
@@ -744,8 +832,8 @@ async fn get_element_tag(
     AxumState(state): AxumState<SharedState>,
     Path((sid, eid)): Path<(String, String)>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let elem = resolve_element(session, &eid)?;
     let result = plugin_post(
         session,
@@ -762,8 +850,8 @@ async fn get_element_attribute(
     AxumState(state): AxumState<SharedState>,
     Path((sid, eid, name)): Path<(String, String, String)>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let elem = resolve_element(session, &eid)?;
     let result = plugin_post(
         session,
@@ -780,8 +868,8 @@ async fn get_element_property(
     AxumState(state): AxumState<SharedState>,
     Path((sid, eid, name)): Path<(String, String, String)>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let elem = resolve_element(session, &eid)?;
     let result = plugin_post(
         session,
@@ -798,8 +886,8 @@ async fn get_element_css(
     AxumState(state): AxumState<SharedState>,
     Path((sid, eid, name)): Path<(String, String, String)>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let elem = resolve_element(session, &eid)?;
     // CSS values use the property endpoint with a computed-style JS property.
     let result = plugin_post(
@@ -825,8 +913,8 @@ async fn get_element_rect(
     AxumState(state): AxumState<SharedState>,
     Path((sid, eid)): Path<(String, String)>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let elem = resolve_element(session, &eid)?;
     let result = plugin_post(
         session,
@@ -841,8 +929,8 @@ async fn is_element_enabled(
     AxumState(state): AxumState<SharedState>,
     Path((sid, eid)): Path<(String, String)>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let elem = resolve_element(session, &eid)?;
     let result = plugin_post(
         session,
@@ -859,8 +947,8 @@ async fn is_element_selected(
     AxumState(state): AxumState<SharedState>,
     Path((sid, eid)): Path<(String, String)>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let elem = resolve_element(session, &eid)?;
     let result = plugin_post(
         session,
@@ -877,8 +965,8 @@ async fn is_element_displayed(
     AxumState(state): AxumState<SharedState>,
     Path((sid, eid)): Path<(String, String)>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let elem = resolve_element(session, &eid)?;
     let result = plugin_post(
         session,
@@ -898,8 +986,8 @@ async fn execute_sync(
     Path(sid): Path<String>,
     Json(body): Json<Value>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let script = body
         .get("script")
         .and_then(|v| v.as_str())
@@ -922,8 +1010,8 @@ async fn execute_async(
     Path(sid): Path<String>,
     Json(body): Json<Value>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let script = body
         .get("script")
         .and_then(|v| v.as_str())
@@ -947,8 +1035,8 @@ async fn get_all_cookies(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let result = plugin_post(session, "/cookie/get-all", json!({})).await?;
     Ok(w3c_value(
         result.get("cookies").cloned().unwrap_or(json!([])),
@@ -959,8 +1047,8 @@ async fn get_named_cookie(
     AxumState(state): AxumState<SharedState>,
     Path((sid, name)): Path<(String, String)>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let result = plugin_post(session, "/cookie/get", json!({"name": name})).await?;
     let cookie = result.get("cookie").cloned().unwrap_or(Value::Null);
     if cookie.is_null() {
@@ -978,8 +1066,8 @@ async fn add_cookie(
     Path(sid): Path<String>,
     Json(body): Json<Value>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let cookie = body.get("cookie").cloned().unwrap_or(json!({}));
     plugin_post(session, "/cookie/add", json!({"cookie": cookie})).await?;
     Ok(w3c_value(json!(null)))
@@ -989,8 +1077,8 @@ async fn delete_cookie(
     AxumState(state): AxumState<SharedState>,
     Path((sid, name)): Path<(String, String)>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     plugin_post(session, "/cookie/delete", json!({"name": name})).await?;
     Ok(w3c_value(json!(null)))
 }
@@ -999,8 +1087,8 @@ async fn delete_all_cookies(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     plugin_post(session, "/cookie/delete-all", json!({})).await?;
     Ok(w3c_value(json!(null)))
 }
@@ -1012,8 +1100,8 @@ async fn perform_actions(
     Path(sid): Path<String>,
     Json(body): Json<Value>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
 
     // Walk through the actions and resolve any W3C element references in
     // pointer action origins before forwarding to the plugin.
@@ -1057,8 +1145,8 @@ async fn release_actions(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     plugin_post(session, "/actions/release", json!({})).await?;
     Ok(w3c_value(json!(null)))
 }
@@ -1069,8 +1157,8 @@ async fn dismiss_alert(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     plugin_post(session, "/alert/dismiss", json!({}))
         .await
         .map_err(|e| {
@@ -1087,8 +1175,8 @@ async fn accept_alert(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     plugin_post(session, "/alert/accept", json!({}))
         .await
         .map_err(|e| {
@@ -1105,8 +1193,8 @@ async fn get_alert_text(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let result = plugin_post(session, "/alert/text", json!({}))
         .await
         .map_err(|e| {
@@ -1126,8 +1214,8 @@ async fn send_alert_text(
     Path(sid): Path<String>,
     Json(body): Json<Value>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let text = body
         .get("text")
         .and_then(|v| v.as_str())
@@ -1150,8 +1238,8 @@ async fn take_screenshot(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let result = plugin_post(session, "/screenshot", json!({})).await?;
     Ok(w3c_value(
         result.get("data").cloned().unwrap_or(json!("")),
@@ -1162,8 +1250,8 @@ async fn element_screenshot(
     AxumState(state): AxumState<SharedState>,
     Path((sid, eid)): Path<(String, String)>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let elem = resolve_element(session, &eid)?;
     let result = plugin_post(
         session,
@@ -1183,8 +1271,8 @@ async fn print_page(
     Path(sid): Path<String>,
     Json(body): Json<Value>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let result = plugin_post(session, "/print", body).await?;
     Ok(w3c_value(
         result.get("data").cloned().unwrap_or(json!("")),
@@ -1197,8 +1285,8 @@ async fn get_shadow_root(
     AxumState(state): AxumState<SharedState>,
     Path((sid, eid)): Path<(String, String)>,
 ) -> W3cResult {
-    let mut guard = state.session.lock().await;
-    let session = check_session_mut(&mut guard, &sid)?;
+    let mut guard = state.sessions.lock().await;
+    let session = get_session_mut(&mut guard, &sid)?;
     let elem = session
         .elements
         .get(&eid)
@@ -1240,8 +1328,8 @@ async fn find_in_shadow(
     Path((sid, shadow_id)): Path<(String, String)>,
     Json(body): Json<Value>,
 ) -> W3cResult {
-    let mut guard = state.session.lock().await;
-    let session = check_session_mut(&mut guard, &sid)?;
+    let mut guard = state.sessions.lock().await;
+    let session = get_session_mut(&mut guard, &sid)?;
     let shadow = session
         .shadows
         .get(&shadow_id)
@@ -1297,8 +1385,8 @@ async fn find_all_in_shadow(
     Path((sid, shadow_id)): Path<(String, String)>,
     Json(body): Json<Value>,
 ) -> W3cResult {
-    let mut guard = state.session.lock().await;
-    let session = check_session_mut(&mut guard, &sid)?;
+    let mut guard = state.sessions.lock().await;
+    let session = get_session_mut(&mut guard, &sid)?;
     let shadow = session
         .shadows
         .get(&shadow_id)
@@ -1350,8 +1438,8 @@ async fn switch_to_frame(
     Path(sid): Path<String>,
     Json(body): Json<Value>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
 
     let frame_id = body.get("id").cloned().unwrap_or(Value::Null);
 
@@ -1386,8 +1474,8 @@ async fn switch_to_parent_frame(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     plugin_post(session, "/frame/parent", json!({})).await?;
     Ok(w3c_value(json!(null)))
 }
@@ -1399,8 +1487,8 @@ async fn switch_to_window(
     Path(sid): Path<String>,
     Json(body): Json<Value>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let handle = body
         .get("handle")
         .and_then(|v| v.as_str())
@@ -1424,8 +1512,8 @@ async fn find_element_from_element(
     Path((sid, eid)): Path<(String, String)>,
     Json(body): Json<Value>,
 ) -> W3cResult {
-    let mut guard = state.session.lock().await;
-    let session = check_session_mut(&mut guard, &sid)?;
+    let mut guard = state.sessions.lock().await;
+    let session = get_session_mut(&mut guard, &sid)?;
     let parent = session
         .elements
         .get(&eid)
@@ -1475,8 +1563,8 @@ async fn find_elements_from_element(
     Path((sid, eid)): Path<(String, String)>,
     Json(body): Json<Value>,
 ) -> W3cResult {
-    let mut guard = state.session.lock().await;
-    let session = check_session_mut(&mut guard, &sid)?;
+    let mut guard = state.sessions.lock().await;
+    let session = get_session_mut(&mut guard, &sid)?;
     let parent = session
         .elements
         .get(&eid)
@@ -1521,8 +1609,8 @@ async fn get_computed_role(
     AxumState(state): AxumState<SharedState>,
     Path((sid, eid)): Path<(String, String)>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let elem = resolve_element(session, &eid)?;
     let result = plugin_post(
         session,
@@ -1539,8 +1627,8 @@ async fn get_computed_label(
     AxumState(state): AxumState<SharedState>,
     Path((sid, eid)): Path<(String, String)>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let elem = resolve_element(session, &eid)?;
     let result = plugin_post(
         session,
@@ -1559,8 +1647,8 @@ async fn get_active_element(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let mut guard = state.session.lock().await;
-    let session = check_session_mut(&mut guard, &sid)?;
+    let mut guard = state.sessions.lock().await;
+    let session = get_session_mut(&mut guard, &sid)?;
     let result = plugin_post(session, "/element/active", json!({})).await?;
     let elem = result.get("element").cloned().unwrap_or(Value::Null);
     if elem.is_null() {
@@ -1580,8 +1668,8 @@ async fn get_page_source(
     AxumState(state): AxumState<SharedState>,
     Path(sid): Path<String>,
 ) -> W3cResult {
-    let guard = state.session.lock().await;
-    let session = check_session(&guard, &sid)?;
+    let guard = state.sessions.lock().await;
+    let session = get_session(&guard, &sid)?;
     let result = plugin_post(session, "/source", json!({})).await?;
     Ok(w3c_value(
         result.get("source").cloned().unwrap_or(json!("")),
@@ -1602,7 +1690,8 @@ async fn main() {
         .init();
 
     let state: SharedState = Arc::new(AppState {
-        session: Mutex::new(None),
+        sessions: Mutex::new(HashMap::new()),
+        max_sessions: cli.max_sessions,
     });
 
     let router = Router::new()
@@ -1759,13 +1848,13 @@ async fn main() {
             tracing::info!("Received SIGINT, shutting down");
         }
 
-        // Kill any active session's app process
-        let mut guard = shutdown_state.session.lock().await;
-        if let Some(session) = guard.as_mut() {
+        // Kill all active sessions' app processes
+        let mut sessions = shutdown_state.sessions.lock().await;
+        for (sid, session) in sessions.iter_mut() {
             let _ = session.process.kill().await;
-            tracing::info!("Killed app process on shutdown");
+            tracing::info!("Killed app process for session {sid} on shutdown");
         }
-        *guard = None;
+        sessions.clear();
     };
 
     axum::serve(listener, router)

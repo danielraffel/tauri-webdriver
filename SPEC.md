@@ -74,6 +74,7 @@ Server binds to `127.0.0.1` only (localhost, not exposed to network).
 | `POST /element/click` | `{"selector":"button","index":0}` | `null` | Click an element |
 | `POST /element/clear` | `{"selector":"input","index":0}` | `null` | Clear an input element |
 | `POST /element/send-keys` | `{"selector":"input","index":0,"text":"hello"}` | `null` | Type into an element |
+| `POST /element/set-files` | `{"selector":"input","index":0,"files":[{"name":"f.txt","data":"base64...","mime":"text/plain"}]}` | `null` | Set files on a file input (DataTransfer API) |
 | `POST /element/displayed` | `{"selector":"#root","index":0}` | `{"displayed":true}` | Check if element is visible |
 | `POST /element/enabled` | `{"selector":"button","index":0}` | `{"enabled":true}` | Check if element is enabled |
 | `POST /element/selected` | `{"selector":"option","index":0}` | `{"selected":false}` | Check if element is selected |
@@ -412,11 +413,12 @@ Subsequent operations on that element UUID are resolved back to (selector, index
 tauri-wd [OPTIONS]
 
 Options:
-  --port <PORT>       WebDriver server port [default: 4444]
-  --host <HOST>       WebDriver server host [default: 127.0.0.1]
-  --log-level <LEVEL> Log level: error, warn, info, debug, trace [default: info]
-  --version           Print version
-  --help              Print help
+  --port <PORT>              WebDriver server port [default: 4444]
+  --host <HOST>              WebDriver server host [default: 127.0.0.1]
+  --log-level <LEVEL>        Log level: error, warn, info, debug, trace [default: info]
+  --max-sessions <N>         Maximum concurrent sessions, 0 = unlimited [default: 0]
+  --version                  Print version
+  --help                     Print help
 ```
 
 ### Dependencies
@@ -427,6 +429,7 @@ Options:
 - `serde` / `serde_json` -- JSON handling
 - `uuid` -- Session and element IDs
 - `clap` -- CLI argument parsing
+- `base64` -- File upload encoding
 - `tracing` / `tracing-subscriber` -- Structured logging
 
 ### Error Handling
@@ -517,6 +520,19 @@ Standard W3C error codes:
 - [x] Frame / iframe support (switch to frame, switch to parent)
 - [x] Computed ARIA role and label
 
+### Phase 6: Multi-session, File Upload, Multi-window Fixes ✓
+**Goal:** Production-ready multi-session support, W3C file upload, and robust multi-window handling.
+
+- [x] Multi-session: `HashMap<String, Session>` with `--max-sessions` CLI arg
+- [x] Multi-session: `/status` reports `ready` based on capacity
+- [x] Multi-session: Graceful shutdown kills all active sessions
+- [x] File upload: Plugin `/element/set-files` endpoint using DataTransfer API
+- [x] File upload: CLI detects `<input type="file">`, reads file, base64-encodes, forwards to plugin
+- [x] File upload: MIME type detection from file extension
+- [x] Multi-window: `Switch To Window` focuses target and resets frame stack
+- [x] Multi-window: `Close Window` clears stale current window label and frame stack
+- [x] Tests: 72 plugin + 106 W3C tests passing
+
 ---
 
 ## Compatibility Targets
@@ -535,6 +551,11 @@ Standard W3C error codes:
 - Frame / iframe navigation with scoped JS evaluation
 - Computed ARIA role and label
 - Full page + element screenshots
+- File upload via DataTransfer API
+- Multi-session support with configurable concurrency limits
+- Multi-window support with proper focus and frame stack management
+- Alert / dialog interception (alert, confirm, prompt)
+- Print to PDF
 - Fully open source (MIT/Apache-2.0)
 - No cloud dependencies or external accounts required
 - Direct 2-hop architecture (CLI → plugin)
@@ -546,26 +567,26 @@ Standard W3C error codes:
 
 Ideas for future development, roughly ordered by impact.
 
-### Multi-session support
-Currently the CLI supports a single active session. Supporting multiple concurrent sessions would allow parallel test execution. Each session would need its own app process, plugin port, and element map.
+### ~~Multi-session support~~ ✓
+Implemented. The CLI now supports multiple concurrent sessions via `HashMap<String, Session>`. Each session has its own app process, plugin port, and element map. Use `--max-sessions N` to limit concurrency (default 0 = unlimited). The `/status` endpoint reports `ready: true` when capacity is available.
 
 ### Native screenshot via `CGWindowListCreateImage`
-The current screenshot approach (SVG foreignObject → Canvas) cannot capture content outside the DOM (native title bars, system dialogs, CSS `backdrop-filter` effects). A native macOS screenshot using `CGWindowListCreateImage` via Tauri's Objective-C bridge would produce pixel-accurate captures.
+The current screenshot approach (SVG foreignObject → Canvas) cannot capture content outside the DOM (native title bars, system dialogs, CSS `backdrop-filter` effects). A native macOS screenshot using `CGWindowListCreateImage` could produce pixel-accurate captures, but the API is deprecated on macOS 15 (Sequoia) and would require heavy native dependencies.
 
 ### ~~Alert / dialog handling~~ ✓
 Implemented. `Dismiss Alert`, `Accept Alert`, `Get Alert Text`, and `Send Alert Text` are supported. Native `window.alert()`, `window.confirm()`, and `window.prompt()` are intercepted via JS injection in `init.js`, with dialog state tracked in `window.__WEBDRIVER__.__dialog`.
 
-### File upload support
-W3C `Element Send Keys` on `<input type="file">` should trigger a file upload. This requires special handling since setting `.value` on file inputs is blocked by browsers for security.
+### ~~File upload support~~ ✓
+Implemented. W3C `Element Send Keys` on `<input type="file">` now triggers file upload. The CLI detects file inputs, reads the file(s) from disk, base64-encodes them, and sends them to the plugin's `/element/set-files` endpoint. The plugin uses the DataTransfer API to programmatically create File objects and assign them to the input's `.files` property.
 
 ### Persistent cookies via `WKHTTPCookieStore`
-The current in-memory cookie store works for testing but doesn't survive page navigations that clear JS state. Using WKWebView's native `WKHTTPCookieStore` API via Tauri's Objective-C bridge would provide persistent, spec-compliant cookie behavior.
+The current in-memory cookie store works for testing but doesn't survive page navigations that clear JS state. Using WKWebView's native `WKHTTPCookieStore` API via Tauri's Objective-C bridge would provide persistent, spec-compliant cookie behavior. However, this doesn't help for `tauri://` URLs since `document.cookie` is broken on custom URL schemes.
 
 ### Linux / Windows support
 The plugin and CLI are platform-agnostic Rust, but testing has only been done on macOS. Linux (WebKitGTK) and Windows (WebView2) use different webview engines. Screenshots and window insets may need platform-specific adjustments.
 
-### Multi-window / multi-webview support
-The plugin resolves windows by label (defaulting to `"main"`). Basic `Switch To Window` is implemented. Full multi-webview support for complex Tauri apps with multiple webview windows would extend the current single-label tracking.
+### ~~Multi-window / multi-webview support~~ ✓
+Implemented. The plugin resolves windows by label (defaulting to `"main"`). `Switch To Window` focuses the target window and resets the frame stack. `Close Window` clears the stale current window label. New windows can be created via `/window/new`.
 
 ---
 

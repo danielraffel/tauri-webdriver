@@ -263,6 +263,27 @@ struct SendKeysReq {
 }
 
 #[derive(Deserialize)]
+struct FileInfo {
+    name: String,
+    data: String, // base64-encoded file content
+    #[serde(default = "default_mime")]
+    mime: String,
+}
+
+fn default_mime() -> String {
+    "application/octet-stream".to_string()
+}
+
+#[derive(Deserialize)]
+struct SetFilesReq {
+    selector: String,
+    index: usize,
+    files: Vec<FileInfo>,
+    #[serde(default)]
+    using: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct ScriptReq {
     script: String,
     #[serde(default)]
@@ -339,6 +360,13 @@ async fn window_close<R: Runtime>(
     window
         .close()
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+    // Clear current_window_label if it matches the closed window
+    let mut label = state.current_window_label.lock().expect("lock poisoned");
+    if label.as_deref() == Some(&body.label) {
+        *label = None;
+    }
+    // Reset frame stack since we may have been in a frame of the closed window
+    state.frame_stack.lock().expect("lock poisoned").clear();
     Ok(Json(json!(true)))
 }
 
@@ -631,6 +659,41 @@ async fn element_send_keys<R: Runtime>(
         "el.focus();el.value+={text_json};\
          el.dispatchEvent(new Event('input',{{bubbles:true}}));\
          el.dispatchEvent(new Event('change',{{bubbles:true}}));return null"
+    );
+    eval_on_element(
+        &state,
+        &body.selector,
+        body.index,
+        body.using.as_deref(),
+        &js,
+    )
+    .await?;
+    Ok(Json(json!(null)))
+}
+
+async fn element_set_files<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(body): Json<SetFilesReq>,
+) -> ApiResult {
+    // Build a JS array of {name, data, mime} objects to pass into the webview.
+    let files_json = serde_json::to_string(&body.files.iter().map(|f| {
+        json!({"name": f.name, "data": f.data, "mime": f.mime})
+    }).collect::<Vec<_>>()).unwrap();
+
+    let js = format!(
+        "if(el.tagName!=='INPUT'||el.type!=='file')throw new Error('element is not a file input');\
+         var _files={files_json};\
+         var dt=new DataTransfer();\
+         for(var i=0;i<_files.length;i++){{\
+           var raw=atob(_files[i].data);\
+           var bytes=new Uint8Array(raw.length);\
+           for(var j=0;j<raw.length;j++)bytes[j]=raw.charCodeAt(j);\
+           dt.items.add(new File([bytes],_files[i].name,{{type:_files[i].mime}}));\
+         }}\
+         el.files=dt.files;\
+         el.dispatchEvent(new Event('input',{{bubbles:true}}));\
+         el.dispatchEvent(new Event('change',{{bubbles:true}}));\
+         return null"
     );
     eval_on_element(
         &state,
@@ -1454,10 +1517,14 @@ async fn window_set_current<R: Runtime>(
     Json(body): Json<SwitchWindowReq>,
 ) -> ApiResult {
     // Validate window exists
-    state
+    let window = state
         .app
         .get_webview_window(&body.label)
         .ok_or_else(|| ApiError::NotFound(format!("window '{}' not found", body.label)))?;
+    // Focus the window (W3C spec: Switch To Window brings window to foreground)
+    let _ = window.set_focus();
+    // Reset frame stack (W3C spec: switching windows resets to top-level context)
+    state.frame_stack.lock().expect("lock poisoned").clear();
     *state
         .current_window_label
         .lock()
@@ -1710,6 +1777,7 @@ pub(crate) async fn start<R: Runtime>(
         .route("/element/click", post(element_click::<R>))
         .route("/element/clear", post(element_clear::<R>))
         .route("/element/send-keys", post(element_send_keys::<R>))
+        .route("/element/set-files", post(element_set_files::<R>))
         .route("/element/displayed", post(element_displayed::<R>))
         .route("/element/enabled", post(element_enabled::<R>))
         .route("/element/selected", post(element_selected::<R>))
