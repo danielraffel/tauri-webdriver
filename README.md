@@ -221,6 +221,13 @@ See the [full technical specification (SPEC.md)](https://github.com/danielraffel
 - Element state management
 - Error handling
 
+## Alternatives
+
+Other WebDriver solutions for Tauri apps on macOS:
+
+- **[tauri-plugin-webdriver](https://github.com/Choochmeque/tauri-plugin-webdriver)** -- Open-source Tauri plugin with a different architecture (embeds a WebDriver server directly in the plugin).
+- **[CrabNebula Cloud](https://docs.crabnebula.dev/plugins/tauri-e2e-tests/#macos-support)** -- Commercial/premium hosted testing service with macOS WebDriver support.
+
 ## License
 
 MIT OR Apache-2.0 (dual-licensed, same as Tauri)
