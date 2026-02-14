@@ -18,8 +18,8 @@ _Disclosure: The code for this project was written in collaboration with Claude 
 - [The Solution](#the-solution)
 - [Who Is This For?](#who-is-this-for)
 - [Quick Start](#quick-start)
-- [Supported W3C WebDriver Operations](#supported-w3c-webdriver-operations)
 - [MCP Integration](#mcp-integration)
+- [Supported W3C WebDriver Operations](#supported-w3c-webdriver-operations)
 - [Architecture](#architecture)
 - [Alternatives](#alternatives)
 - [Additional info](#additional-info)
@@ -101,7 +101,47 @@ tauri-wd --port 4444
 npx wdio run wdio.conf.mjs
 ```
 
-> **Want AI-driven automation instead?** See [MCP Integration](#mcp-integration) to control your Tauri app with Claude Code through natural language.
+## MCP Integration
+
+`tauri-webdriver` works with [mcp-tauri-automation](https://github.com/danielraffel/mcp-tauri-automation) to enable AI-driven automation of Tauri apps via the [Model Context Protocol](https://modelcontextprotocol.io/). This lets AI agents (like Claude Code) launch, inspect, interact with, and screenshot your Tauri app through natural language.
+
+### Setup
+
+**1. Install the MCP server:**
+
+```sh
+git clone https://github.com/danielraffel/mcp-tauri-automation.git
+cd mcp-tauri-automation
+npm install && npm run build
+```
+
+**2. Add to Claude Code:**
+
+```sh
+claude mcp add --transport stdio tauri-automation \
+  --scope user \
+  -- node /absolute/path/to/mcp-tauri-automation/dist/index.js
+```
+
+Optionally set a default app path so you don't have to specify it every time:
+
+```sh
+claude mcp add --transport stdio tauri-automation \
+  --env TAURI_APP_PATH=/path/to/your-app/src-tauri/target/debug/your-app \
+  --scope user \
+  -- node /absolute/path/to/mcp-tauri-automation/dist/index.js
+```
+
+**3. Start `tauri-wd` and use with Claude:**
+
+```sh
+# Keep this running in a separate terminal
+tauri-wd --port 4444
+```
+
+Then ask Claude: *"Launch my Tauri app and take a screenshot"*
+
+> **Note:** [mcp-tauri-automation](https://github.com/danielraffel/mcp-tauri-automation) is a fork of [Radek44/mcp-tauri-automation](https://github.com/Radek44/mcp-tauri-automation) with additional tools (execute_script, get_page_title, get_page_url, multi-strategy selectors, configurable timeouts, wait_for_navigation). These additions have been [submitted upstream](https://github.com/Radek44/mcp-tauri-automation). For cross-platform MCP support, see the [original project](https://github.com/Radek44/mcp-tauri-automation).
 
 ## Supported W3C WebDriver Operations
 
@@ -228,48 +268,6 @@ All operations follow the [W3C WebDriver specification](https://www.w3.org/TR/we
 | W3C Endpoint | Method | Description |
 |-------------|--------|-------------|
 | `/session/{id}/print` | POST | Print page to PDF (base64-encoded) |
-
-## MCP Integration
-
-`tauri-webdriver` works with [mcp-tauri-automation](https://github.com/danielraffel/mcp-tauri-automation) to enable AI-driven automation of Tauri apps via the [Model Context Protocol](https://modelcontextprotocol.io/). This lets AI agents (like Claude Code) launch, inspect, interact with, and screenshot your Tauri app through natural language.
-
-### Setup
-
-**1. Install the MCP server:**
-
-```sh
-git clone https://github.com/danielraffel/mcp-tauri-automation.git
-cd mcp-tauri-automation
-npm install && npm run build
-```
-
-**2. Add to Claude Code:**
-
-```sh
-claude mcp add --transport stdio tauri-automation \
-  --scope user \
-  -- node /absolute/path/to/mcp-tauri-automation/dist/index.js
-```
-
-Optionally set a default app path so you don't have to specify it every time:
-
-```sh
-claude mcp add --transport stdio tauri-automation \
-  --env TAURI_APP_PATH=/path/to/your-app/src-tauri/target/debug/your-app \
-  --scope user \
-  -- node /absolute/path/to/mcp-tauri-automation/dist/index.js
-```
-
-**3. Start `tauri-wd` and use with Claude:**
-
-```sh
-# Keep this running in a separate terminal
-tauri-wd --port 4444
-```
-
-Then ask Claude: *"Launch my Tauri app and take a screenshot"*
-
-> **Note:** [mcp-tauri-automation](https://github.com/danielraffel/mcp-tauri-automation) is a fork of [Radek44/mcp-tauri-automation](https://github.com/Radek44/mcp-tauri-automation) with additional tools (execute_script, get_page_title, get_page_url, multi-strategy selectors, configurable timeouts, wait_for_navigation). These additions have been [submitted upstream](https://github.com/Radek44/mcp-tauri-automation). For cross-platform MCP support, see the [original project](https://github.com/Radek44/mcp-tauri-automation).
 
 ## Architecture
 
