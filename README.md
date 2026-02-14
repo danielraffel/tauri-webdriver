@@ -105,8 +105,9 @@ npx vite --port 5173          # Vite
 To have your agent (Claude Code, Codex, etc) handle this automatically, add a note to your project's `CLAUDE.md` or `AGENTS.md`:
 
 ```md
-## WebDriver / MCP Automation
-Before using tauri-wd or MCP tools, start the frontend dev server:
+## WebDriver Automation
+The Tauri debug binary loads the frontend from devUrl, so the dev server
+must be running before tauri-wd launches the app:
 cd apps/desktop && npx vite --port 5173
 ```
 
