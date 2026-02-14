@@ -48,7 +48,7 @@ WebDriverIO/Selenium                 tauri-wd CLI                Your Tauri App
 ## Who Is This For?
 
 - **Tauri app developers** who need automated e2e tests on macOS
-- **CI/CD pipelines** that run tests across macOS, Linux, and Windows
+- **CI/CD pipelines** that run tests and need a macOS solution
 - **Anyone with platform-specific Tauri code** that must be verified on macOS (deep links, native APIs, system integrations)
 
 ## Quick Start
