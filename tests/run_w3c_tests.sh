@@ -317,6 +317,68 @@ sleep 0.3
 run_test "GET cookies (after delete)" "GET" "/session/$SESSION_ID/cookie" "" '"value"'
 
 echo ""
+echo "=== New Window ==="
+run_test "Create new window" "POST" "/session/$SESSION_ID/window/new" '{"type":"window"}' '"handle"'
+# Extract the new window handle
+NEW_WINDOW_HANDLE=$(cat /tmp/tauri-webdriver-last-result | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+v=d.get('value',{})
+print(v.get('handle',''))
+" 2>/dev/null)
+echo "      New window handle: $NEW_WINDOW_HANDLE"
+if [ -n "$NEW_WINDOW_HANDLE" ]; then
+  run_test "Window handles includes new" "GET" "/session/$SESSION_ID/window/handles" "" '"wd-'
+  # Switch to new window and close it
+  run_test "Switch to new window" "POST" "/session/$SESSION_ID/window" "{\"handle\":\"$NEW_WINDOW_HANDLE\"}" 'null'
+  run_test "Close new window" "DELETE" "/session/$SESSION_ID/window" "" '"value"'
+  # Switch back to main
+  run_test "Switch back to main" "POST" "/session/$SESSION_ID/window" '{"handle":"main"}' 'null'
+fi
+
+echo ""
+echo "=== Alert/Dialog Handling ==="
+# Find alert trigger buttons
+run_test "Find #trigger-alert" "POST" "/session/$SESSION_ID/element" '{"using":"css selector","value":"#trigger-alert"}' '"element-6066'
+extract_element_id ALERT_BTN_EID
+run_test "Find #trigger-confirm" "POST" "/session/$SESSION_ID/element" '{"using":"css selector","value":"#trigger-confirm"}' '"element-6066'
+extract_element_id CONFIRM_BTN_EID
+run_test "Find #trigger-prompt" "POST" "/session/$SESSION_ID/element" '{"using":"css selector","value":"#trigger-prompt"}' '"element-6066'
+extract_element_id PROMPT_BTN_EID
+
+# Test no alert error
+run_test "GET alert text (no alert)" "GET" "/session/$SESSION_ID/alert/text" "" '"no such alert"'
+
+# Test alert
+if [ -n "$ALERT_BTN_EID" ]; then
+  run_test "Click alert button" "POST" "/session/$SESSION_ID/element/$ALERT_BTN_EID/click" "" 'null'
+  sleep 0.3
+  run_test "GET alert text" "GET" "/session/$SESSION_ID/alert/text" "" '"Hello Alert"'
+  run_test "Dismiss alert" "POST" "/session/$SESSION_ID/alert/dismiss" "" 'null'
+fi
+
+# Test confirm
+if [ -n "$CONFIRM_BTN_EID" ]; then
+  run_test "Click confirm button" "POST" "/session/$SESSION_ID/element/$CONFIRM_BTN_EID/click" "" 'null'
+  sleep 0.3
+  run_test "GET confirm text" "GET" "/session/$SESSION_ID/alert/text" "" '"Are you sure?"'
+  run_test "Accept confirm" "POST" "/session/$SESSION_ID/alert/accept" "" 'null'
+fi
+
+# Test prompt
+if [ -n "$PROMPT_BTN_EID" ]; then
+  run_test "Click prompt button" "POST" "/session/$SESSION_ID/element/$PROMPT_BTN_EID/click" "" 'null'
+  sleep 0.3
+  run_test "GET prompt text" "GET" "/session/$SESSION_ID/alert/text" "" '"Enter name"'
+  run_test "Send text to prompt" "POST" "/session/$SESSION_ID/alert/text" '{"text":"Bob"}' 'null'
+  run_test "Accept prompt" "POST" "/session/$SESSION_ID/alert/accept" "" 'null'
+fi
+
+echo ""
+echo "=== Print to PDF ==="
+run_test "Print page" "POST" "/session/$SESSION_ID/print" '{}' '"value"'
+
+echo ""
 echo "=== Perform Actions ==="
 # Key action: type a character
 run_test "Key actions (type 'x')" "POST" "/session/$SESSION_ID/actions" '{"actions":[{"type":"key","id":"k1","actions":[{"type":"keyDown","value":"x"},{"type":"keyUp","value":"x"}]}]}' 'null'

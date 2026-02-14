@@ -151,9 +151,39 @@ sleep 0.2
 run_test "Get active element" "/element/active" "{}" '"selector"'
 
 echo ""
+echo "=== New Window ==="
+run_test "Create new window" "/window/new" '{}' '"handle"'
+run_test "Verify window handles (2+)" "/window/handles" "{}" '"wd-'
+# Switch back to main for remaining tests
+run_test "Switch back to main" "/window/set-current" '{"label":"main"}' 'true'
+
+echo ""
+echo "=== Alert/Dialog Handling ==="
+# Trigger alert via click, then test alert endpoints
+run_test "Click trigger-alert button" "/element/click" '{"selector":"#trigger-alert","index":0}' 'null'
+sleep 0.2
+run_test "Get alert text" "/alert/text" '{}' '"Hello Alert"'
+run_test "Dismiss alert" "/alert/dismiss" '{}' 'null'
+# Verify no alert is open
+run_test "Trigger confirm dialog" "/element/click" '{"selector":"#trigger-confirm","index":0}' 'null'
+sleep 0.2
+run_test "Get confirm text" "/alert/text" '{}' '"Are you sure?"'
+run_test "Accept confirm" "/alert/accept" '{}' 'null'
+# Trigger prompt, send text, accept
+run_test "Trigger prompt dialog" "/element/click" '{"selector":"#trigger-prompt","index":0}' 'null'
+sleep 0.2
+run_test "Get prompt text" "/alert/text" '{}' '"Enter name"'
+run_test "Send text to prompt" "/alert/send-text" '{"text":"Bob"}' 'null'
+run_test "Accept prompt" "/alert/accept" '{}' 'null'
+
+echo ""
 echo "=== Screenshots ==="
 run_test "Full page screenshot" "/screenshot" "{}" '"data"'
 run_test "Element screenshot (#title)" "/screenshot/element" '{"selector":"#title","index":0}' '"data"'
+
+echo ""
+echo "=== Print to PDF ==="
+run_test "Print page to PDF" "/print" '{}' '"data"'
 
 echo ""
 echo "=== Cookies ==="

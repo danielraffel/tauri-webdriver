@@ -57,6 +57,7 @@ Server binds to `127.0.0.1` only (localhost, not exposed to network).
 | `POST /window/fullscreen` | `{}` | `true` | Make window fullscreen |
 | `POST /window/minimize` | `{}` | `true` | Minimize window |
 | `POST /window/maximize` | `{}` | `true` | Maximize window |
+| `POST /window/new` | `{"type":"window"}` | `{"handle":"wd-...","type":"window"}` | Create a new window |
 | `POST /window/insets` | `{}` | `{"top":28,"bottom":0,"x":0,"y":28}` | Get safe area insets (macOS) |
 
 #### Element Operations
@@ -120,12 +121,27 @@ Server binds to `127.0.0.1` only (localhost, not exposed to network).
 |----------|-------------|----------|-------------|
 | `POST /source` | `{}` | `{"source":"<html>..."}` | Get full page HTML source |
 
+#### Alerts / Dialogs
+
+| Endpoint | Request Body | Response | Description |
+|----------|-------------|----------|-------------|
+| `POST /alert/text` | `{}` | `{"text":"Hello"}` | Get current dialog text |
+| `POST /alert/dismiss` | `{}` | `null` | Dismiss (cancel) the dialog |
+| `POST /alert/accept` | `{}` | `null` | Accept (OK) the dialog |
+| `POST /alert/send-text` | `{"text":"Bob"}` | `null` | Send text to a prompt dialog |
+
 #### Screenshots
 
 | Endpoint | Request Body | Response | Description |
 |----------|-------------|----------|-------------|
 | `POST /screenshot` | `{}` | `{"data":"base64..."}` | Full page screenshot |
 | `POST /screenshot/element` | `{"selector":"#root","index":0}` | `{"data":"base64..."}` | Element screenshot |
+
+#### Print
+
+| Endpoint | Request Body | Response | Description |
+|----------|-------------|----------|-------------|
+| `POST /print` | `{}` | `{"data":"base64..."}` | Print page to PDF (base64-encoded) |
 
 #### Cookies
 
@@ -165,7 +181,10 @@ window.__WEBDRIVER__ = {
     cookies: {},
 
     // Shadow DOM element cache (direct references to shadow-internal elements)
-    __shadowCache: {}
+    __shadowCache: {},
+
+    // Dialog state for intercepted alert/confirm/prompt
+    __dialog: { open: false, type: null, text: null, response: null }
 };
 ```
 
@@ -251,6 +270,7 @@ Implements the [W3C WebDriver specification](https://www.w3.org/TR/webdriver2/):
 |----------|--------|-------------|
 | `/session/{id}/window` | GET/POST/DELETE | Get handle / Switch / Close |
 | `/session/{id}/window/handles` | GET | Get all handles |
+| `/session/{id}/window/new` | POST | Create a new window |
 | `/session/{id}/window/rect` | GET/POST | Get/set rect |
 | `/session/{id}/window/maximize` | POST | Maximize |
 | `/session/{id}/window/minimize` | POST | Minimize |
@@ -302,12 +322,27 @@ Implements the [W3C WebDriver specification](https://www.w3.org/TR/webdriver2/):
 | `/session/{id}/execute/sync` | POST | Execute sync script |
 | `/session/{id}/execute/async` | POST | Execute async script |
 
+#### Alerts / Dialogs
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/session/{id}/alert/dismiss` | POST | Dismiss the current dialog |
+| `/session/{id}/alert/accept` | POST | Accept the current dialog |
+| `/session/{id}/alert/text` | GET | Get dialog message text |
+| `/session/{id}/alert/text` | POST | Send text to a prompt dialog |
+
 #### Screenshots
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/session/{id}/screenshot` | GET | Full page screenshot |
 | `/session/{id}/element/{eid}/screenshot` | GET | Element screenshot |
+
+#### Print
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/session/{id}/print` | POST | Print page to PDF (base64-encoded) |
 
 #### Cookies
 
@@ -517,8 +552,8 @@ Currently the CLI supports a single active session. Supporting multiple concurre
 ### Native screenshot via `CGWindowListCreateImage`
 The current screenshot approach (SVG foreignObject → Canvas) cannot capture content outside the DOM (native title bars, system dialogs, CSS `backdrop-filter` effects). A native macOS screenshot using `CGWindowListCreateImage` via Tauri's Objective-C bridge would produce pixel-accurate captures.
 
-### Alert / dialog handling
-W3C endpoints for `Accept Alert`, `Dismiss Alert`, `Get Alert Text`, `Send Alert Text`. Requires intercepting `window.alert()`, `window.confirm()`, `window.prompt()` via JS injection before the page loads.
+### ~~Alert / dialog handling~~ ✓
+Implemented. `Dismiss Alert`, `Accept Alert`, `Get Alert Text`, and `Send Alert Text` are supported. Native `window.alert()`, `window.confirm()`, and `window.prompt()` are intercepted via JS injection in `init.js`, with dialog state tracked in `window.__WEBDRIVER__.__dialog`.
 
 ### File upload support
 W3C `Element Send Keys` on `<input type="file">` should trigger a file upload. This requires special handling since setting `.value` on file inputs is blocked by browsers for security.

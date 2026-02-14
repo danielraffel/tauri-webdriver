@@ -452,6 +452,38 @@ async fn window_insets<R: Runtime>(
     })))
 }
 
+// --- New window handler ---
+
+#[derive(Deserialize)]
+struct WindowNewReq {
+    #[serde(rename = "type")]
+    #[allow(dead_code)]
+    type_hint: Option<String>,
+}
+
+async fn window_new<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(_body): Json<WindowNewReq>,
+) -> ApiResult {
+    let label = format!("wd-{}", uuid::Uuid::new_v4());
+
+    let window = tauri::WebviewWindowBuilder::new(
+        &state.app,
+        &label,
+        tauri::WebviewUrl::default(),
+    )
+    .inner_size(800.0, 600.0)
+    .build()
+    .map_err(|e| ApiError::Internal(format!("failed to create window: {e}")))?;
+
+    // Wait briefly for the window to initialize
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let _ = window.set_focus();
+
+    Ok(Json(json!({"handle": label, "type": "window"})))
+}
+
 // --- Element handlers ---
 
 async fn element_find<R: Runtime>(
@@ -794,6 +826,77 @@ async fn navigate_refresh<R: Runtime>(
     Ok(Json(json!(null)))
 }
 
+// --- Alert/Dialog handlers ---
+
+async fn alert_get_text<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(_body): Json<Value>,
+) -> ApiResult {
+    let result = eval_js(
+        &state,
+        "var d=window.__WEBDRIVER__.__dialog;\
+         if(!d.open)throw new Error('no such alert');\
+         return d.text",
+    )
+    .await?;
+    Ok(Json(json!({"text": result})))
+}
+
+async fn alert_dismiss<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(_body): Json<Value>,
+) -> ApiResult {
+    eval_js(
+        &state,
+        "var d=window.__WEBDRIVER__.__dialog;\
+         if(!d.open)throw new Error('no such alert');\
+         if(d.type==='confirm')d.response=false;\
+         if(d.type==='prompt')d.response=null;\
+         d.open=false;\
+         return null",
+    )
+    .await?;
+    Ok(Json(json!(null)))
+}
+
+async fn alert_accept<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(_body): Json<Value>,
+) -> ApiResult {
+    eval_js(
+        &state,
+        "var d=window.__WEBDRIVER__.__dialog;\
+         if(!d.open)throw new Error('no such alert');\
+         if(d.type==='confirm')d.response=true;\
+         if(d.type==='prompt'&&d.response===null)d.response=d.defaultValue||'';\
+         d.open=false;\
+         return null",
+    )
+    .await?;
+    Ok(Json(json!(null)))
+}
+
+#[derive(Deserialize)]
+struct AlertTextReq {
+    text: String,
+}
+
+async fn alert_send_text<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(body): Json<AlertTextReq>,
+) -> ApiResult {
+    let text_json = serde_json::to_string(&body.text).unwrap();
+    let script = format!(
+        "var d=window.__WEBDRIVER__.__dialog;\
+         if(!d.open)throw new Error('no such alert');\
+         if(d.type!=='prompt')throw new Error('no such alert');\
+         d.response={text_json};\
+         return null"
+    );
+    eval_js(&state, &script).await?;
+    Ok(Json(json!(null)))
+}
+
 // --- Screenshot handlers ---
 
 /// Helper: run raw JS that manually calls __WEBDRIVER__.resolve(id, result).
@@ -925,6 +1028,67 @@ img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg)
     );
 
     let result = eval_js_callback(&state, &script).await?;
+    Ok(Json(json!({"data": result})))
+}
+
+// --- Print to PDF handler ---
+
+async fn print_page<R: Runtime>(
+    AxumState(state): AxumState<SharedState<R>>,
+    Json(_body): Json<Value>,
+) -> ApiResult {
+    // Render the page to a canvas (same SVG foreignObject approach as screenshots),
+    // then wrap the PNG image data in a minimal PDF 1.4 structure.
+    let script = r#"(function(){try{
+var el=document.documentElement;
+var w=Math.max(el.scrollWidth,el.clientWidth);
+var h=Math.max(el.scrollHeight,el.clientHeight);
+var xml=new XMLSerializer().serializeToString(el);
+var svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'" height="'+h+'">'
++'<foreignObject width="100%" height="100%">'+xml+'</foreignObject></svg>';
+var c=document.createElement('canvas');c.width=w;c.height=h;
+var ctx=c.getContext('2d');var img=new Image();
+img.onload=function(){try{ctx.drawImage(img,0,0);
+var pngDataUrl=c.toDataURL('image/png');
+var pngB64=pngDataUrl.split(',')[1];
+var bin=atob(pngB64);var len=bin.length;
+var imgW=w;var imgH=h;
+var pageW=612;var pageH=792;
+var scaleX=pageW/imgW;var scaleY=pageH/imgH;
+var sc=Math.min(scaleX,scaleY);
+var dw=Math.round(imgW*sc);var dh=Math.round(imgH*sc);
+var objs=[];var offsets=[];
+function addObj(s){offsets.push(objs.join('').length);objs.push(s)}
+addObj('%PDF-1.4\n');
+addObj('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+addObj('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n');
+addObj('3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 '+pageW+' '+pageH+'] /Contents 5 0 R /Resources << /XObject << /Img 4 0 R >> >> >>\nendobj\n');
+var imgStream='4 0 obj\n<< /Type /XObject /Subtype /Image /Width '+imgW+' /Height '+imgH+' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length '+(len*6+1)+' >>\nstream\n';
+var hexParts=[];for(var i=0;i<len;i++){
+var byte=bin.charCodeAt(i);
+hexParts.push(('0'+byte.toString(16)).slice(-2))}
+imgStream+=hexParts.join('')+'>\nendstream\nendobj\n';
+addObj(imgStream);
+var contentStr='q '+dw+' 0 0 '+dh+' 0 '+(pageH-dh)+' cm /Img Do Q';
+addObj('5 0 obj\n<< /Length '+contentStr.length+' >>\nstream\n'+contentStr+'\nendstream\nendobj\n');
+var body=objs.join('');
+var xrefOff=body.length;
+var xref='xref\n0 6\n0000000000 65535 f \n';
+for(var j=1;j<offsets.length;j++){
+xref+=('0000000000'+offsets[j]).slice(-10)+' 00000 n \n'}
+xref+='trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n'+xrefOff+'\n%%EOF';
+var pdf=body+xref;
+var pdfB64=btoa(pdf);
+window.__WEBDRIVER__.resolve("__CALLBACK_ID__",pdfB64)}
+catch(e){window.__WEBDRIVER__.resolve("__CALLBACK_ID__",
+{error:e.name,message:e.message,stacktrace:e.stack||""})}};
+img.onerror=function(){window.__WEBDRIVER__.resolve("__CALLBACK_ID__",
+{error:"PrintError",message:"SVG render failed",stacktrace:""})};
+img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg)
+}catch(e){window.__WEBDRIVER__.resolve("__CALLBACK_ID__",
+{error:e.name,message:e.message,stacktrace:e.stack||""})}})()"#;
+
+    let result = eval_js_callback(&state, script).await?;
     Ok(Json(json!({"data": result})))
 }
 
@@ -1535,6 +1699,7 @@ pub(crate) async fn start<R: Runtime>(
         .route("/window/maximize", post(window_maximize::<R>))
         .route("/window/insets", post(window_insets::<R>))
         .route("/window/set-current", post(window_set_current::<R>))
+        .route("/window/new", post(window_new::<R>))
         // Elements
         .route("/element/find", post(element_find::<R>))
         .route("/element/text", post(element_text::<R>))
@@ -1573,8 +1738,15 @@ pub(crate) async fn start<R: Runtime>(
         .route("/cookie/add", post(cookie_add::<R>))
         .route("/cookie/delete", post(cookie_delete::<R>))
         .route("/cookie/delete-all", post(cookie_delete_all::<R>))
+        // Alerts
+        .route("/alert/text", post(alert_get_text::<R>))
+        .route("/alert/dismiss", post(alert_dismiss::<R>))
+        .route("/alert/accept", post(alert_accept::<R>))
+        .route("/alert/send-text", post(alert_send_text::<R>))
         // Page source
         .route("/source", post(get_source::<R>))
+        // Print
+        .route("/print", post(print_page::<R>))
         // Actions
         .route("/actions/perform", post(actions_perform::<R>))
         .route("/actions/release", post(actions_release::<R>))

@@ -590,6 +590,21 @@ async fn fullscreen_window(
     Ok(w3c_value(result))
 }
 
+// --- New window handler ---
+
+async fn new_window(
+    AxumState(state): AxumState<SharedState>,
+    Path(sid): Path<String>,
+    Json(body): Json<Value>,
+) -> W3cResult {
+    let guard = state.session.lock().await;
+    let session = check_session(&guard, &sid)?;
+    let result = plugin_post(session, "/window/new", body).await?;
+    let handle = result.get("handle").cloned().unwrap_or(json!(""));
+    let type_val = result.get("type").cloned().unwrap_or(json!("window"));
+    Ok(w3c_value(json!({"handle": handle, "type": type_val})))
+}
+
 // --- Element handlers ---
 
 async fn find_element(
@@ -1048,6 +1063,87 @@ async fn release_actions(
     Ok(w3c_value(json!(null)))
 }
 
+// --- Alert/Dialog handlers ---
+
+async fn dismiss_alert(
+    AxumState(state): AxumState<SharedState>,
+    Path(sid): Path<String>,
+) -> W3cResult {
+    let guard = state.session.lock().await;
+    let session = check_session(&guard, &sid)?;
+    plugin_post(session, "/alert/dismiss", json!({}))
+        .await
+        .map_err(|e| {
+            if e.message.contains("no such alert") {
+                W3cError::new(StatusCode::NOT_FOUND, "no such alert", &e.message)
+            } else {
+                e
+            }
+        })?;
+    Ok(w3c_value(json!(null)))
+}
+
+async fn accept_alert(
+    AxumState(state): AxumState<SharedState>,
+    Path(sid): Path<String>,
+) -> W3cResult {
+    let guard = state.session.lock().await;
+    let session = check_session(&guard, &sid)?;
+    plugin_post(session, "/alert/accept", json!({}))
+        .await
+        .map_err(|e| {
+            if e.message.contains("no such alert") {
+                W3cError::new(StatusCode::NOT_FOUND, "no such alert", &e.message)
+            } else {
+                e
+            }
+        })?;
+    Ok(w3c_value(json!(null)))
+}
+
+async fn get_alert_text(
+    AxumState(state): AxumState<SharedState>,
+    Path(sid): Path<String>,
+) -> W3cResult {
+    let guard = state.session.lock().await;
+    let session = check_session(&guard, &sid)?;
+    let result = plugin_post(session, "/alert/text", json!({}))
+        .await
+        .map_err(|e| {
+            if e.message.contains("no such alert") {
+                W3cError::new(StatusCode::NOT_FOUND, "no such alert", &e.message)
+            } else {
+                e
+            }
+        })?;
+    Ok(w3c_value(
+        result.get("text").cloned().unwrap_or(json!("")),
+    ))
+}
+
+async fn send_alert_text(
+    AxumState(state): AxumState<SharedState>,
+    Path(sid): Path<String>,
+    Json(body): Json<Value>,
+) -> W3cResult {
+    let guard = state.session.lock().await;
+    let session = check_session(&guard, &sid)?;
+    let text = body
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    plugin_post(session, "/alert/send-text", json!({"text": text}))
+        .await
+        .map_err(|e| {
+            if e.message.contains("no such alert") {
+                W3cError::new(StatusCode::NOT_FOUND, "no such alert", &e.message)
+            } else {
+                e
+            }
+        })?;
+    Ok(w3c_value(json!(null)))
+}
+
 // --- Screenshot handlers ---
 
 async fn take_screenshot(
@@ -1075,6 +1171,21 @@ async fn element_screenshot(
         json!({"selector": elem.selector, "index": elem.index, "using": elem.using}),
     )
     .await?;
+    Ok(w3c_value(
+        result.get("data").cloned().unwrap_or(json!("")),
+    ))
+}
+
+// --- Print handler ---
+
+async fn print_page(
+    AxumState(state): AxumState<SharedState>,
+    Path(sid): Path<String>,
+    Json(body): Json<Value>,
+) -> W3cResult {
+    let guard = state.session.lock().await;
+    let session = check_session(&guard, &sid)?;
+    let result = plugin_post(session, "/print", body).await?;
     Ok(w3c_value(
         result.get("data").cloned().unwrap_or(json!("")),
     ))
@@ -1520,6 +1631,7 @@ async fn main() {
         .route("/session/{sid}/window/maximize", post(maximize_window))
         .route("/session/{sid}/window/minimize", post(minimize_window))
         .route("/session/{sid}/window/fullscreen", post(fullscreen_window))
+        .route("/session/{sid}/window/new", post(new_window))
         // Frames
         .route("/session/{sid}/frame", post(switch_to_frame))
         .route(
@@ -1603,9 +1715,16 @@ async fn main() {
             "/session/{sid}/cookie/{name}",
             delete(delete_cookie),
         )
+        // Alerts
+        .route("/session/{sid}/alert/dismiss", post(dismiss_alert))
+        .route("/session/{sid}/alert/accept", post(accept_alert))
+        .route("/session/{sid}/alert/text", get(get_alert_text))
+        .route("/session/{sid}/alert/text", post(send_alert_text))
         // Actions
         .route("/session/{sid}/actions", post(perform_actions))
         .route("/session/{sid}/actions", delete(release_actions))
+        // Print
+        .route("/session/{sid}/print", post(print_page))
         // Screenshots
         .route("/session/{sid}/screenshot", get(take_screenshot))
         .route(

@@ -120,6 +120,7 @@ All operations follow the [W3C WebDriver specification](https://www.w3.org/TR/we
 | `/session/{id}/window` | POST | Switch to window by handle |
 | `/session/{id}/window` | DELETE | Close current window |
 | `/session/{id}/window/handles` | GET | Get all window handles |
+| `/session/{id}/window/new` | POST | Create a new window |
 | `/session/{id}/window/rect` | GET | Get window position and size |
 | `/session/{id}/window/rect` | POST | Set window position and size |
 | `/session/{id}/window/maximize` | POST | Maximize window |
@@ -189,12 +190,27 @@ All operations follow the [W3C WebDriver specification](https://www.w3.org/TR/we
 | `/session/{id}/cookie/{name}` | DELETE | Delete a cookie by name |
 | `/session/{id}/cookie` | DELETE | Delete all cookies |
 
+### Alerts
+
+| W3C Endpoint | Method | Description |
+|-------------|--------|-------------|
+| `/session/{id}/alert/dismiss` | POST | Dismiss (cancel) the current dialog |
+| `/session/{id}/alert/accept` | POST | Accept (OK) the current dialog |
+| `/session/{id}/alert/text` | GET | Get the dialog message text |
+| `/session/{id}/alert/text` | POST | Send text to a prompt dialog |
+
 ### Actions
 
 | W3C Endpoint | Method | Description |
 |-------------|--------|-------------|
 | `/session/{id}/actions` | POST | [Perform actions](https://github.com/danielraffel/tauri-webdriver/blob/main/SPEC.md#actions): key (keyDown/keyUp), pointer (move/down/up), wheel (scroll) |
 | `/session/{id}/actions` | DELETE | Release all actions |
+
+### Print
+
+| W3C Endpoint | Method | Description |
+|-------------|--------|-------------|
+| `/session/{id}/print` | POST | Print page to PDF (base64-encoded) |
 
 ## MCP Integration
 
@@ -213,20 +229,27 @@ tauri-wd --port 4444
 
 ## Architecture
 
-See the [full technical specification (SPEC.md)](https://github.com/danielraffel/tauri-webdriver/blob/main/SPEC.md) for:
-- Plugin HTTP API (all endpoints, request/response formats)
-- CLI W3C WebDriver endpoint mapping
-- JavaScript bridge internals (element identity, shadow DOM cache, frame context)
-- Session creation flow
-- Element state management
-- Error handling
+Two Rust crates work together in a simple 2-hop design:
+
+```
+WebDriverIO/Selenium ──HTTP:4444──> tauri-wd CLI ──HTTP:{dynamic}──> tauri-plugin-webdriver-automation
+                                    (W3C WebDriver)                   (axum server in-app)
+```
+
+**The plugin** (`tauri-plugin-webdriver-automation`) runs inside your Tauri app in debug builds. On startup it binds an [axum](https://github.com/tokio-rs/axum) HTTP server to `127.0.0.1` on a random port and prints `[webdriver] listening on port {N}` to stdout. It injects a JavaScript bridge (`init.js`) into every webview that provides element finding, an async script callback mechanism, dialog interception, and an in-memory cookie store (needed because WKWebView doesn't support `document.cookie` on `tauri://` URLs). All DOM interaction happens by evaluating JS in the webview and receiving results back via Tauri IPC.
+
+**The CLI** (`tauri-wd`) is a standalone binary that implements the W3C WebDriver HTTP protocol on port 4444. When a test framework creates a session, the CLI launches your app binary, watches stdout for the port announcement, and then translates every W3C request into a plugin HTTP call. Elements are tracked as `(selector, index, using)` triples internally, mapped to W3C UUID strings for the session lifetime. Shadow DOM elements use a separate in-memory cache since `document.querySelectorAll()` can't reach into shadow roots. Frame/iframe context is managed by a stack that scopes JS evaluation to the correct `contentDocument`.
+
+**Session flow:** Test client sends `POST /session` with `tauri:options.binary` pointing to your app. The CLI spawns the binary with `TAURI_WEBVIEW_AUTOMATION=true`, reads the plugin port from stdout, and returns a session ID. All subsequent W3C commands are forwarded to the plugin as JSON-over-HTTP POST requests. When the session is deleted, the app process is killed.
+
+For the full internal API reference, see [SPEC.md](https://github.com/danielraffel/tauri-webdriver/blob/main/SPEC.md).
 
 ## Alternatives
 
-Other WebDriver solutions for Tauri apps on macOS:
+When we started building this, we were developing a macOS Tauri app and frustrated that there was no easy way to do automated e2e testing -- Apple doesn't provide a WebDriver for WKWebView. We ended up building this at roughly the same time others tackled the same problem. Probably not the greatest use of time in hindsight, but here we are.
 
-- **[tauri-plugin-webdriver](https://github.com/Choochmeque/tauri-plugin-webdriver)** -- Open-source Tauri plugin with a different architecture (embeds a WebDriver server directly in the plugin).
-- **[CrabNebula Cloud](https://docs.crabnebula.dev/plugins/tauri-e2e-tests/#macos-support)** -- Commercial/premium hosted testing service with macOS WebDriver support.
+- **[tauri-plugin-webdriver](https://github.com/Choochmeque/tauri-plugin-webdriver)** -- Open-source Tauri plugin that embeds a WebDriver server directly in the plugin (single-crate architecture vs our two-crate approach). Supports **macOS**, **Linux**, and **Windows** -- if you need cross-platform WebDriver support, this is the more mature choice.
+- **[CrabNebula Cloud](https://docs.crabnebula.dev/plugins/tauri-e2e-tests/#macos-support)** -- Commercial hosted testing service with macOS WebDriver support.
 
 ## License
 

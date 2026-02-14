@@ -41,7 +41,7 @@ Tauri v2 plugin. Starts an axum HTTP server on `127.0.0.1:{random_port}` during 
 
 - **`lib.rs`** — Plugin entry point. Registers `resolve` IPC command, injects `init.js`, spawns HTTP server. Manages `WebDriverState` (pending script oneshot channels).
 - **`server.rs`** — All HTTP handlers. Every endpoint is `POST` with JSON. Uses `eval_js()` helper that wraps JS in an IIFE, calls `window.__WEBDRIVER__.resolve(id, result)` to return values via Tauri IPC. `eval_js_callback()` variant for async operations (screenshots) where the JS itself calls resolve. Manages frame stack state for iframe navigation and current window label for multi-window support.
-- **`init.js`** — Injected into every webview. Defines `window.__WEBDRIVER__` with `resolve()`, `findElement()`, `findElementByXPath()`, `findElementInShadow()`, `getActiveElement()`, `cache` (element cache), `cookies` (in-memory cookie store), and `__shadowCache` (shadow DOM element cache).
+- **`init.js`** — Injected into every webview. Defines `window.__WEBDRIVER__` with `resolve()`, `findElement()`, `findElementByXPath()`, `findElementInShadow()`, `getActiveElement()`, `cache` (element cache), `cookies` (in-memory cookie store), `__shadowCache` (shadow DOM element cache), and `__dialog` (intercepted alert/confirm/prompt state). Also overrides `window.alert()`, `window.confirm()`, and `window.prompt()` with intercepting versions.
 
 Key pattern: All DOM interaction goes through JS evaluation. The plugin evaluates JavaScript in the webview and receives results back via the `plugin:webdriver-automation|resolve` Tauri IPC command.
 
@@ -72,5 +72,8 @@ Minimal Tauri app with testable elements (counter button, text input, dropdown, 
 - **Screenshots**: SVG foreignObject + Canvas approach (serialize DOM to SVG, render to canvas, export as base64 PNG).
 - **Shadow DOM**: Elements inside shadow roots are cached in `window.__WEBDRIVER__.__shadowCache` keyed by generated IDs. The `using: "shadow"` locator type resolves elements from this cache rather than `document.querySelectorAll()`.
 - **Frame/iframe**: Plugin tracks a frame stack (`Vec<FrameRef>`). When non-empty, `eval_js()` prepends JS that navigates the iframe hierarchy via `contentDocument` and passes the target frame's document as a function parameter to avoid JS hoisting issues.
+- **Alerts/Dialogs**: `window.alert()`, `window.confirm()`, `window.prompt()` are intercepted in `init.js`. State is stored in `window.__WEBDRIVER__.__dialog`. Plugin endpoints: `/alert/text`, `/alert/dismiss`, `/alert/accept`, `/alert/send-text`. CLI maps "no such alert" errors to W3C `"no such alert"` (HTTP 404).
+- **New Window**: Plugin `/window/new` creates a new `WebviewWindow` via Tauri's builder API. CLI `POST /session/{id}/window/new` returns `{handle, type}`.
+- **Print to PDF**: Plugin `/print` uses the same SVG foreignObject approach as screenshots, then wraps the rendered PNG in a minimal PDF 1.4 structure. Returns base64-encoded PDF.
 - **Error mapping**: Plugin HTTP 500 → `W3cError`. Script execution errors specifically map to `"javascript error"` W3C error code.
 - **Debug-only plugin**: The plugin should only be registered in debug builds via `#[cfg(debug_assertions)]`.

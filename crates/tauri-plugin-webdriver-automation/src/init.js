@@ -81,6 +81,36 @@
     configurable: false,
   });
 
+  // Intercept native dialogs for WebDriver alert handling.
+  // These must be set up before page scripts run.
+  window.alert = function (msg) {
+    window.__WEBDRIVER__.__dialog = {
+      open: true,
+      type: "alert",
+      text: String(msg || ""),
+      response: null,
+    };
+  };
+  window.confirm = function (msg) {
+    window.__WEBDRIVER__.__dialog = {
+      open: true,
+      type: "confirm",
+      text: String(msg || ""),
+      response: false,
+    };
+    return window.__WEBDRIVER__.__dialog.response;
+  };
+  window.prompt = function (msg, defaultVal) {
+    window.__WEBDRIVER__.__dialog = {
+      open: true,
+      type: "prompt",
+      text: String(msg || ""),
+      defaultValue: defaultVal || "",
+      response: null,
+    };
+    return window.__WEBDRIVER__.__dialog.response;
+  };
+
   Object.defineProperties(window.__WEBDRIVER__, {
     resolve: { value: resolve, writable: false, configurable: false },
     findElement: { value: findElement, writable: false, configurable: false },
@@ -112,6 +142,11 @@
     cookies: {
       value: Object.create(null),
       writable: false,
+      configurable: false,
+    },
+    __dialog: {
+      value: { open: false, type: null, text: null, response: null },
+      writable: true,
       configurable: false,
     },
   });
