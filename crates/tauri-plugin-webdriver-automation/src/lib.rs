@@ -95,4 +95,3 @@ pub(crate) fn window_by_label<R: Runtime>(
             .or_else(|| app.webview_windows().into_values().next())
     }
 }
-

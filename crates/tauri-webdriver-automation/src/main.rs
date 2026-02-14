@@ -121,7 +121,11 @@ impl W3cError {
         )
     }
     fn session_not_created(msg: impl Into<String>) -> Self {
-        Self::new(StatusCode::INTERNAL_SERVER_ERROR, "session not created", msg)
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "session not created",
+            msg,
+        )
     }
     fn unknown(msg: impl Into<String>) -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, "unknown error", msg)
@@ -130,11 +134,7 @@ impl W3cError {
         Self::new(StatusCode::BAD_REQUEST, "invalid argument", msg)
     }
     fn javascript_error(msg: impl Into<String>) -> Self {
-        Self::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "javascript error",
-            msg,
-        )
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, "javascript error", msg)
     }
 }
 
@@ -190,7 +190,10 @@ async fn plugin_post(session: &Session, path: &str, body: Value) -> Result<Value
 }
 
 fn resolve_element<'a>(session: &'a Session, eid: &str) -> Result<&'a ElementRef, W3cError> {
-    session.elements.get(eid).ok_or_else(|| W3cError::no_element(eid))
+    session
+        .elements
+        .get(eid)
+        .ok_or_else(|| W3cError::no_element(eid))
 }
 
 fn extract_locator(body: &Value) -> Result<(String, String), W3cError> {
@@ -211,10 +214,7 @@ fn extract_locator(body: &Value) -> Result<(String, String), W3cError> {
             "xpath".to_string(),
             format!("//a[normalize-space()='{}']", value),
         ),
-        "partial link text" => (
-            "xpath".to_string(),
-            format!("//a[contains(.,'{}')]", value),
-        ),
+        "partial link text" => ("xpath".to_string(), format!("//a[contains(.,'{}')]", value)),
         other => {
             return Err(W3cError::bad_request(format!(
                 "Unsupported locator strategy: {other}"
@@ -455,34 +455,21 @@ async fn navigate_to(
     Ok(w3c_value(json!(null)))
 }
 
-async fn get_url(
-    AxumState(state): AxumState<SharedState>,
-    Path(sid): Path<String>,
-) -> W3cResult {
+async fn get_url(AxumState(state): AxumState<SharedState>, Path(sid): Path<String>) -> W3cResult {
     let guard = state.sessions.lock().await;
     let session = get_session(&guard, &sid)?;
     let result = plugin_post(session, "/navigate/current", json!({})).await?;
-    Ok(w3c_value(
-        result.get("url").cloned().unwrap_or(json!("")),
-    ))
+    Ok(w3c_value(result.get("url").cloned().unwrap_or(json!(""))))
 }
 
-async fn get_title(
-    AxumState(state): AxumState<SharedState>,
-    Path(sid): Path<String>,
-) -> W3cResult {
+async fn get_title(AxumState(state): AxumState<SharedState>, Path(sid): Path<String>) -> W3cResult {
     let guard = state.sessions.lock().await;
     let session = get_session(&guard, &sid)?;
     let result = plugin_post(session, "/navigate/title", json!({})).await?;
-    Ok(w3c_value(
-        result.get("title").cloned().unwrap_or(json!("")),
-    ))
+    Ok(w3c_value(result.get("title").cloned().unwrap_or(json!(""))))
 }
 
-async fn go_back(
-    AxumState(state): AxumState<SharedState>,
-    Path(sid): Path<String>,
-) -> W3cResult {
+async fn go_back(AxumState(state): AxumState<SharedState>, Path(sid): Path<String>) -> W3cResult {
     let guard = state.sessions.lock().await;
     let session = get_session(&guard, &sid)?;
     plugin_post(session, "/navigate/back", json!({})).await?;
@@ -499,10 +486,7 @@ async fn go_forward(
     Ok(w3c_value(json!(null)))
 }
 
-async fn refresh(
-    AxumState(state): AxumState<SharedState>,
-    Path(sid): Path<String>,
-) -> W3cResult {
+async fn refresh(AxumState(state): AxumState<SharedState>, Path(sid): Path<String>) -> W3cResult {
     let guard = state.sessions.lock().await;
     let session = get_session(&guard, &sid)?;
     plugin_post(session, "/navigate/refresh", json!({})).await?;
@@ -624,8 +608,12 @@ async fn find_element(
     let mut guard = state.sessions.lock().await;
     let session = get_session_mut(&mut guard, &sid)?;
     let (using, value) = extract_locator(&body)?;
-    let result =
-        plugin_post(session, "/element/find", json!({"using": using, "value": value})).await?;
+    let result = plugin_post(
+        session,
+        "/element/find",
+        json!({"using": using, "value": value}),
+    )
+    .await?;
 
     let elements = result
         .get("elements")
@@ -658,8 +646,12 @@ async fn find_elements(
     let mut guard = state.sessions.lock().await;
     let session = get_session_mut(&mut guard, &sid)?;
     let (using, value) = extract_locator(&body)?;
-    let result =
-        plugin_post(session, "/element/find", json!({"using": using, "value": value})).await?;
+    let result = plugin_post(
+        session,
+        "/element/find",
+        json!({"using": using, "value": value}),
+    )
+    .await?;
 
     let empty = vec![];
     let elements = result
@@ -718,10 +710,7 @@ async fn send_keys(
     let guard = state.sessions.lock().await;
     let session = get_session(&guard, &sid)?;
     let elem = resolve_element(session, &eid)?;
-    let text = body
-        .get("text")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let text = body.get("text").and_then(|v| v.as_str()).unwrap_or("");
 
     // Check if this is a file input by querying its tag and type attribute.
     let tag_result = plugin_post(
@@ -730,10 +719,7 @@ async fn send_keys(
         json!({"selector": elem.selector, "index": elem.index, "using": elem.using}),
     )
     .await?;
-    let tag = tag_result
-        .get("tag")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let tag = tag_result.get("tag").and_then(|v| v.as_str()).unwrap_or("");
 
     if tag.eq_ignore_ascii_case("input") {
         let attr_result = plugin_post(
@@ -823,9 +809,7 @@ async fn get_element_text(
         json!({"selector": elem.selector, "index": elem.index, "using": elem.using}),
     )
     .await?;
-    Ok(w3c_value(
-        result.get("text").cloned().unwrap_or(json!("")),
-    ))
+    Ok(w3c_value(result.get("text").cloned().unwrap_or(json!(""))))
 }
 
 async fn get_element_tag(
@@ -841,9 +825,7 @@ async fn get_element_tag(
         json!({"selector": elem.selector, "index": elem.index, "using": elem.using}),
     )
     .await?;
-    Ok(w3c_value(
-        result.get("tag").cloned().unwrap_or(json!("")),
-    ))
+    Ok(w3c_value(result.get("tag").cloned().unwrap_or(json!(""))))
 }
 
 async fn get_element_attribute(
@@ -988,10 +970,7 @@ async fn execute_sync(
 ) -> W3cResult {
     let guard = state.sessions.lock().await;
     let session = get_session(&guard, &sid)?;
-    let script = body
-        .get("script")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let script = body.get("script").and_then(|v| v.as_str()).unwrap_or("");
     let args = body.get("args").cloned().unwrap_or(json!([]));
     let result = plugin_post(
         session,
@@ -1012,10 +991,7 @@ async fn execute_async(
 ) -> W3cResult {
     let guard = state.sessions.lock().await;
     let session = get_session(&guard, &sid)?;
-    let script = body
-        .get("script")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let script = body.get("script").and_then(|v| v.as_str()).unwrap_or("");
     let args = body.get("args").cloned().unwrap_or(json!([]));
     let result = plugin_post(
         session,
@@ -1111,15 +1087,11 @@ async fn perform_actions(
         .and_then(|a| a.as_array_mut())
     {
         for seq in actions.iter_mut() {
-            if let Some(sub_actions) =
-                seq.get_mut("actions").and_then(|a| a.as_array_mut())
-            {
+            if let Some(sub_actions) = seq.get_mut("actions").and_then(|a| a.as_array_mut()) {
                 for action in sub_actions.iter_mut() {
                     // Check if origin is a W3C element reference object.
                     if let Some(origin) = action.get("origin").cloned() {
-                        if let Some(eid) =
-                            origin.get(W3C_ELEMENT_KEY).and_then(|v| v.as_str())
-                        {
+                        if let Some(eid) = origin.get(W3C_ELEMENT_KEY).and_then(|v| v.as_str()) {
                             if let Some(elem_ref) = session.elements.get(eid) {
                                 // Replace element UUID with selector/index for the plugin.
                                 action["origin"] = json!({
@@ -1204,9 +1176,7 @@ async fn get_alert_text(
                 e
             }
         })?;
-    Ok(w3c_value(
-        result.get("text").cloned().unwrap_or(json!("")),
-    ))
+    Ok(w3c_value(result.get("text").cloned().unwrap_or(json!(""))))
 }
 
 async fn send_alert_text(
@@ -1216,10 +1186,7 @@ async fn send_alert_text(
 ) -> W3cResult {
     let guard = state.sessions.lock().await;
     let session = get_session(&guard, &sid)?;
-    let text = body
-        .get("text")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let text = body.get("text").and_then(|v| v.as_str()).unwrap_or("");
     plugin_post(session, "/alert/send-text", json!({"text": text}))
         .await
         .map_err(|e| {
@@ -1241,9 +1208,7 @@ async fn take_screenshot(
     let guard = state.sessions.lock().await;
     let session = get_session(&guard, &sid)?;
     let result = plugin_post(session, "/screenshot", json!({})).await?;
-    Ok(w3c_value(
-        result.get("data").cloned().unwrap_or(json!("")),
-    ))
+    Ok(w3c_value(result.get("data").cloned().unwrap_or(json!(""))))
 }
 
 async fn element_screenshot(
@@ -1259,9 +1224,7 @@ async fn element_screenshot(
         json!({"selector": elem.selector, "index": elem.index, "using": elem.using}),
     )
     .await?;
-    Ok(w3c_value(
-        result.get("data").cloned().unwrap_or(json!("")),
-    ))
+    Ok(w3c_value(result.get("data").cloned().unwrap_or(json!(""))))
 }
 
 // --- Print handler ---
@@ -1274,9 +1237,7 @@ async fn print_page(
     let guard = state.sessions.lock().await;
     let session = get_session(&guard, &sid)?;
     let result = plugin_post(session, "/print", body).await?;
-    Ok(w3c_value(
-        result.get("data").cloned().unwrap_or(json!("")),
-    ))
+    Ok(w3c_value(result.get("data").cloned().unwrap_or(json!(""))))
 }
 
 // --- Shadow DOM handlers ---
@@ -1330,16 +1291,13 @@ async fn find_in_shadow(
 ) -> W3cResult {
     let mut guard = state.sessions.lock().await;
     let session = get_session_mut(&mut guard, &sid)?;
-    let shadow = session
-        .shadows
-        .get(&shadow_id)
-        .ok_or_else(|| {
-            W3cError::new(
-                StatusCode::NOT_FOUND,
-                "no such shadow root",
-                format!("Shadow root {shadow_id} not found"),
-            )
-        })?;
+    let shadow = session.shadows.get(&shadow_id).ok_or_else(|| {
+        W3cError::new(
+            StatusCode::NOT_FOUND,
+            "no such shadow root",
+            format!("Shadow root {shadow_id} not found"),
+        )
+    })?;
     let host_selector = shadow.host_selector.clone();
     let host_index = shadow.host_index;
     let host_using = shadow.host_using.clone();
@@ -1387,16 +1345,13 @@ async fn find_all_in_shadow(
 ) -> W3cResult {
     let mut guard = state.sessions.lock().await;
     let session = get_session_mut(&mut guard, &sid)?;
-    let shadow = session
-        .shadows
-        .get(&shadow_id)
-        .ok_or_else(|| {
-            W3cError::new(
-                StatusCode::NOT_FOUND,
-                "no such shadow root",
-                format!("Shadow root {shadow_id} not found"),
-            )
-        })?;
+    let shadow = session.shadows.get(&shadow_id).ok_or_else(|| {
+        W3cError::new(
+            StatusCode::NOT_FOUND,
+            "no such shadow root",
+            format!("Shadow root {shadow_id} not found"),
+        )
+    })?;
     let host_selector = shadow.host_selector.clone();
     let host_index = shadow.host_index;
     let host_using = shadow.host_using.clone();
@@ -1636,9 +1591,7 @@ async fn get_computed_label(
         json!({"selector": elem.selector, "index": elem.index, "using": elem.using}),
     )
     .await?;
-    Ok(w3c_value(
-        result.get("label").cloned().unwrap_or(json!("")),
-    ))
+    Ok(w3c_value(result.get("label").cloned().unwrap_or(json!(""))))
 }
 
 // --- Active element handler ---
@@ -1723,10 +1676,7 @@ async fn main() {
         .route("/session/{sid}/window/new", post(new_window))
         // Frames
         .route("/session/{sid}/frame", post(switch_to_frame))
-        .route(
-            "/session/{sid}/frame/parent",
-            post(switch_to_parent_frame),
-        )
+        .route("/session/{sid}/frame/parent", post(switch_to_parent_frame))
         // Elements
         .route("/session/{sid}/element", post(find_element))
         .route("/session/{sid}/elements", post(find_elements))
@@ -1756,10 +1706,7 @@ async fn main() {
             "/session/{sid}/element/{eid}/css/{name}",
             get(get_element_css),
         )
-        .route(
-            "/session/{sid}/element/{eid}/rect",
-            get(get_element_rect),
-        )
+        .route("/session/{sid}/element/{eid}/rect", get(get_element_rect))
         .route(
             "/session/{sid}/element/{eid}/enabled",
             get(is_element_enabled),
@@ -1780,14 +1727,8 @@ async fn main() {
             "/session/{sid}/element/{eid}/computedlabel",
             get(get_computed_label),
         )
-        .route(
-            "/session/{sid}/element/{eid}/shadow",
-            get(get_shadow_root),
-        )
-        .route(
-            "/session/{sid}/shadow/{sid2}/element",
-            post(find_in_shadow),
-        )
+        .route("/session/{sid}/element/{eid}/shadow", get(get_shadow_root))
+        .route("/session/{sid}/shadow/{sid2}/element", post(find_in_shadow))
         .route(
             "/session/{sid}/shadow/{sid2}/elements",
             post(find_all_in_shadow),
@@ -1800,10 +1741,7 @@ async fn main() {
         .route("/session/{sid}/cookie", post(add_cookie))
         .route("/session/{sid}/cookie", delete(delete_all_cookies))
         .route("/session/{sid}/cookie/{name}", get(get_named_cookie))
-        .route(
-            "/session/{sid}/cookie/{name}",
-            delete(delete_cookie),
-        )
+        .route("/session/{sid}/cookie/{name}", delete(delete_cookie))
         // Alerts
         .route("/session/{sid}/alert/dismiss", post(dismiss_alert))
         .route("/session/{sid}/alert/accept", post(accept_alert))

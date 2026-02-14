@@ -80,10 +80,7 @@ type ApiResult = Result<Json<Value>, ApiError>;
 
 // --- JS evaluation helpers ---
 
-async fn eval_js<R: Runtime>(
-    state: &SharedState<R>,
-    script: &str,
-) -> Result<Value, ApiError> {
+async fn eval_js<R: Runtime>(state: &SharedState<R>, script: &str) -> Result<Value, ApiError> {
     let label = state
         .current_window_label
         .lock()
@@ -495,14 +492,10 @@ async fn window_new<R: Runtime>(
 ) -> ApiResult {
     let label = format!("wd-{}", uuid::Uuid::new_v4());
 
-    let window = tauri::WebviewWindowBuilder::new(
-        &state.app,
-        &label,
-        tauri::WebviewUrl::default(),
-    )
-    .inner_size(800.0, 600.0)
-    .build()
-    .map_err(|e| ApiError::Internal(format!("failed to create window: {e}")))?;
+    let window = tauri::WebviewWindowBuilder::new(&state.app, &label, tauri::WebviewUrl::default())
+        .inner_size(800.0, 600.0)
+        .build()
+        .map_err(|e| ApiError::Internal(format!("failed to create window: {e}")))?;
 
     // Wait briefly for the window to initialize
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -676,9 +669,14 @@ async fn element_set_files<R: Runtime>(
     Json(body): Json<SetFilesReq>,
 ) -> ApiResult {
     // Build a JS array of {name, data, mime} objects to pass into the webview.
-    let files_json = serde_json::to_string(&body.files.iter().map(|f| {
-        json!({"name": f.name, "data": f.data, "mime": f.mime})
-    }).collect::<Vec<_>>()).unwrap();
+    let files_json = serde_json::to_string(
+        &body
+            .files
+            .iter()
+            .map(|f| json!({"name": f.name, "data": f.data, "mime": f.mime}))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
 
     let js = format!(
         "if(el.tagName!=='INPUT'||el.type!=='file')throw new Error('element is not a file input');\
@@ -1223,9 +1221,7 @@ async fn cookie_delete<R: Runtime>(
     Json(body): Json<CookieNameReq>,
 ) -> ApiResult {
     let name_json = serde_json::to_string(&body.name).unwrap();
-    let script = format!(
-        "delete window.__WEBDRIVER__.cookies[{name_json}];return null"
-    );
+    let script = format!("delete window.__WEBDRIVER__.cookies[{name_json}];return null");
     eval_js(&state, &script).await?;
     Ok(Json(json!(null)))
 }
@@ -1255,7 +1251,11 @@ async fn actions_perform<R: Runtime>(
     // Determine the number of ticks (max length across all action sequences).
     let tick_count = action_sequences
         .iter()
-        .filter_map(|seq| seq.get("actions").and_then(|a| a.as_array()).map(|a| a.len()))
+        .filter_map(|seq| {
+            seq.get("actions")
+                .and_then(|a| a.as_array())
+                .map(|a| a.len())
+        })
         .max()
         .unwrap_or(0);
 
@@ -1281,10 +1281,7 @@ async fn actions_perform<R: Runtime>(
 
             match (source_type, action_type) {
                 ("key", "keyDown") => {
-                    let key = action
-                        .get("value")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let key = action.get("value").and_then(|v| v.as_str()).unwrap_or("");
                     let key_json = serde_json::to_string(key).unwrap();
                     js_parts.push(format!(
                         "(function(){{var k={key_json};\
@@ -1295,10 +1292,7 @@ async fn actions_perform<R: Runtime>(
                     ));
                 }
                 ("key", "keyUp") => {
-                    let key = action
-                        .get("value")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let key = action.get("value").and_then(|v| v.as_str()).unwrap_or("");
                     let key_json = serde_json::to_string(key).unwrap();
                     js_parts.push(format!(
                         "(function(){{var k={key_json};\
@@ -1317,20 +1311,10 @@ async fn actions_perform<R: Runtime>(
                         .unwrap_or("viewport");
 
                     // If origin is an element object, resolve its center.
-                    if let Some(origin_obj) =
-                        action.get("origin").and_then(|v| v.as_object())
-                    {
-                        if let Some(elem) =
-                            origin_obj.values().next().and_then(|v| v.as_object())
-                        {
-                            let sel = elem
-                                .get("selector")
-                                .and_then(|s| s.as_str())
-                                .unwrap_or("");
-                            let idx = elem
-                                .get("index")
-                                .and_then(|i| i.as_u64())
-                                .unwrap_or(0);
+                    if let Some(origin_obj) = action.get("origin").and_then(|v| v.as_object()) {
+                        if let Some(elem) = origin_obj.values().next().and_then(|v| v.as_object()) {
+                            let sel = elem.get("selector").and_then(|s| s.as_str()).unwrap_or("");
+                            let idx = elem.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
                             let sel_json = serde_json::to_string(sel).unwrap();
                             js_parts.push(format!(
                                 "(function(){{var el=document.querySelectorAll({sel_json})[{idx}];\
@@ -1367,8 +1351,7 @@ async fn actions_perform<R: Runtime>(
                     );
                 }
                 ("pointer", "pointerDown") => {
-                    let button =
-                        action.get("button").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let button = action.get("button").and_then(|v| v.as_u64()).unwrap_or(0);
                     js_parts.push(format!(
                         "(function(){{var tgt=document.elementFromPoint(\
                          window.__wdPointerX||0,window.__wdPointerY||0)||document.body;\
@@ -1378,8 +1361,7 @@ async fn actions_perform<R: Runtime>(
                     ));
                 }
                 ("pointer", "pointerUp") => {
-                    let button =
-                        action.get("button").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let button = action.get("button").and_then(|v| v.as_u64()).unwrap_or(0);
                     js_parts.push(format!(
                         "(function(){{var tgt=document.elementFromPoint(\
                          window.__wdPointerX||0,window.__wdPointerY||0)||document.body;\
@@ -1394,10 +1376,8 @@ async fn actions_perform<R: Runtime>(
                 ("wheel", "scroll") => {
                     let x = action.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
                     let y = action.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    let delta_x =
-                        action.get("deltaX").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    let delta_y =
-                        action.get("deltaY").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let delta_x = action.get("deltaX").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let delta_y = action.get("deltaY").and_then(|v| v.as_f64()).unwrap_or(0.0);
                     js_parts.push(format!(
                         "(function(){{var tgt=document.elementFromPoint({x},{y})||document.body;\
                          tgt.dispatchEvent(new WheelEvent('wheel',\
@@ -1406,10 +1386,7 @@ async fn actions_perform<R: Runtime>(
                     ));
                 }
                 (_, "pause") => {
-                    let d = action
-                        .get("duration")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
+                    let d = action.get("duration").and_then(|v| v.as_u64()).unwrap_or(0);
                     if d > pause_ms {
                         pause_ms = d;
                     }
@@ -1525,10 +1502,7 @@ async fn window_set_current<R: Runtime>(
     let _ = window.set_focus();
     // Reset frame stack (W3C spec: switching windows resets to top-level context)
     state.frame_stack.lock().expect("lock poisoned").clear();
-    *state
-        .current_window_label
-        .lock()
-        .expect("lock poisoned") = Some(body.label.clone());
+    *state.current_window_label.lock().expect("lock poisoned") = Some(body.label.clone());
     Ok(Json(json!(true)))
 }
 
@@ -1665,8 +1639,7 @@ async fn element_active<R: Runtime>(
     AxumState(state): AxumState<SharedState<R>>,
     Json(_body): Json<Value>,
 ) -> ApiResult {
-    let result =
-        eval_js(&state, "return window.__WEBDRIVER__.getActiveElement()").await?;
+    let result = eval_js(&state, "return window.__WEBDRIVER__.getActiveElement()").await?;
     Ok(Json(json!({"element": result})))
 }
 
@@ -1676,8 +1649,7 @@ async fn get_source<R: Runtime>(
     AxumState(state): AxumState<SharedState<R>>,
     Json(_body): Json<Value>,
 ) -> ApiResult {
-    let result =
-        eval_js(&state, "return document.documentElement.outerHTML").await?;
+    let result = eval_js(&state, "return document.documentElement.outerHTML").await?;
     Ok(Json(json!({"source": result})))
 }
 
@@ -1718,10 +1690,7 @@ async fn frame_switch<R: Runtime>(
             .and_then(|s| s.as_str())
             .ok_or_else(|| ApiError::Internal("frame element missing selector".into()))?
             .to_string();
-        let index = obj
-            .get("index")
-            .and_then(|i| i.as_u64())
-            .unwrap_or(0) as usize;
+        let index = obj.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
         state
             .frame_stack
             .lock()
