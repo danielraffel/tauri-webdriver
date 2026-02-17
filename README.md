@@ -18,6 +18,7 @@ _Disclosure: The code for this project was written in collaboration with Claude 
 - [The Solution](#the-solution)
 - [Who Is This For?](#who-is-this-for)
 - [Quick Start](#quick-start)
+- [Local Disk Cleanup](#local-disk-cleanup)
 - [MCP Integration](#mcp-integration)
 - [Supported W3C WebDriver Operations](#supported-w3c-webdriver-operations)
 - [Architecture](#architecture)
@@ -121,6 +122,22 @@ tauri-wd --port 4444
 # Terminal 2: Run your tests
 npx wdio run wdio.conf.mjs
 ```
+
+## Local Disk Cleanup
+
+Rust build artifacts can take several GB in this repo. To clean local-only files:
+
+```sh
+bash scripts/clean.sh
+```
+
+For a deeper cleanup (also removes `tests/wdio/node_modules` and generated files in `screenshots/`):
+
+```sh
+bash scripts/clean.sh --deep
+```
+
+After cleanup, the next build is slower because Rust has to recompile from scratch.
 
 ## MCP Integration
 
